@@ -1,4 +1,6 @@
+import os
 import random
+from urllib.parse import urlparse, urlunparse, unquote
 from patchright.sync_api import sync_playwright
 from .base_controller import BaseBrowserController
 
@@ -9,14 +11,40 @@ class PatchrightController(BaseBrowserController):
         try:
             p = sync_playwright().start() 
 
-            proxy_settings = {
-                "server": self.proxy,
-                "bypass": "localhost",
-            } if self.proxy else None
+            proxy_settings = None
+            if self.proxy:
+                parsed = urlparse(self.proxy)
+                if parsed.username or parsed.password:
+                    host = parsed.hostname or ''
+                    if parsed.port:
+                        host = f"{host}:{parsed.port}"
+                    proxy_settings = {
+                        "server": urlunparse((parsed.scheme, host, '', '', '', '')),
+                        "username": unquote(parsed.username or ''),
+                        "password": unquote(parsed.password or ''),
+                        "bypass": "localhost",
+                    }
+                else:
+                    proxy_settings = {
+                        "server": self.proxy,
+                        "bypass": "localhost",
+                    }
 
-            b = p.chromium.launch(
-                headless=False,            
-                args=['--lang=zh-CN'],
+            profile_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.profiles', 'patchright_default'))
+            os.makedirs(profile_dir, exist_ok=True)
+            b = p.chromium.launch_persistent_context(
+                user_data_dir=profile_dir,
+                headless=False,
+                args=[
+                    '--lang=zh-CN',
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-features=WebRtcHideLocalIpsWithMdns',
+                    '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+                ],
+                locale='zh-CN',
+                timezone_id='America/New_York',
+                viewport={"width": 1365, "height": 768},
+                screen={"width": 1365, "height": 768},
                 proxy=proxy_settings
             )
 
@@ -79,8 +107,9 @@ class PatchrightController(BaseBrowserController):
         return True
 
     def get_thread_page(self):
-        browser = self.get_thread_browser()
-        context = browser.new_context()
+        context = self.get_thread_browser()
+        if context.pages:
+            return context.pages[0]
         return context.new_page()
 
     def clean_up(self, page=None, type="all_browser"):
