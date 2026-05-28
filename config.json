@@ -1,11 +1,11 @@
 {
     "choose_browser": "patchright",
     "email_suffix": "@hotmail.com",
-    "proxy": "http://127.0.0.1:7897",
+    "proxy": "http://webshareus1.acct:outlook-proxy@127.0.0.1:2270",
     "bot_protection_wait": 11,
     "max_captcha_retries": 2,
-    "concurrent_flows": 5,
-    "max_tasks": 5,
+    "concurrent_flows": 1,
+    "max_tasks": 1,
     "oauth2": {
         "enable_oauth2": false,
         "client_id": "",
