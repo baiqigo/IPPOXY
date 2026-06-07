@@ -175,24 +175,7 @@ class PatchrightController(BaseBrowserController):
         try:
             p = sync_playwright().start() 
 
-            proxy_settings = None
-            if self.proxy:
-                parsed = urlparse(self.proxy)
-                if parsed.username or parsed.password:
-                    host = parsed.hostname or ''
-                    if parsed.port:
-                        host = f"{host}:{parsed.port}"
-                    proxy_settings = {
-                        "server": urlunparse((parsed.scheme, host, '', '', '', '')),
-                        "username": unquote(parsed.username or ''),
-                        "password": unquote(parsed.password or ''),
-                        "bypass": "localhost",
-                    }
-                else:
-                    proxy_settings = {
-                        "server": self.proxy,
-                        "bypass": "localhost",
-                    }
+            proxy_settings = self.browser_proxy_settings()
 
             profile_dir = os.path.abspath(os.path.join(
                 os.path.dirname(__file__),

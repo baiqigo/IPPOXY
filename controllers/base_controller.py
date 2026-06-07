@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 from faker import Faker
 from abc import ABC, abstractmethod
+from urllib.parse import urlparse, urlunparse, unquote
 
 class BaseBrowserController(ABC):
     """
@@ -44,6 +45,32 @@ class BaseBrowserController(ABC):
         self.captures_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'captures')
         os.makedirs(self.captures_dir, exist_ok=True)
 
+    def browser_proxy_settings(self):
+        if not self.proxy:
+            return None
+
+        parsed = urlparse(self.proxy)
+        scheme = "socks5" if parsed.scheme == "socks5h" else parsed.scheme
+        if parsed.username or parsed.password:
+            host = parsed.hostname or ''
+            if parsed.port:
+                host = f"{host}:{parsed.port}"
+            return {
+                "server": urlunparse((scheme, host, '', '', '', '')),
+                "username": unquote(parsed.username or ''),
+                "password": unquote(parsed.password or ''),
+                "bypass": "localhost",
+            }
+
+        if parsed.scheme == "socks5h":
+            return {
+                "server": urlunparse((scheme, parsed.netloc, parsed.path, parsed.params, parsed.query, parsed.fragment)),
+                "bypass": "localhost",
+            }
+        return {
+            "server": self.proxy,
+            "bypass": "localhost",
+        }
 
     @abstractmethod
     def launch_browser(self):
