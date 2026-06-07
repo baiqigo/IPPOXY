@@ -199,10 +199,12 @@ def select_rows(
     by_raw: set[str] = set()
     selected: list[dict] = []
 
-    def add(item: dict, source: str) -> bool:
+    def add(item: dict, source: str, allow_bad: bool = False) -> bool:
         raw = item.get("turn") or item.get("raw")
         exit_ip = item.get("exit_ip")
         if not raw or not exit_ip or raw in by_raw or exit_ip in by_exit:
+            return False
+        if not allow_bad and str(exit_ip) in bad_exit_ips:
             return False
         if len(selected) >= limit:
             return False
@@ -224,7 +226,7 @@ def select_rows(
 
     if len(selected) < limit:
         for item in baseline:
-            add(item, "baseline_retain_failed")
+            add(item, "baseline_retain_failed", allow_bad=True)
             if len(selected) >= limit:
                 break
 
