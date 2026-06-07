@@ -1,6 +1,7 @@
 import json
 import os
 import signal
+import time
 from pathlib import Path
 
 from controllers.patchright_controller import PatchrightController
@@ -34,13 +35,19 @@ def main():
         page.goto("https://example.com", timeout=30000, wait_until="domcontentloaded")
         title = page.title()
         page.screenshot(path=str(captures / "sandbox_smoke.png"), full_page=True)
-        print(json.dumps({
+        payload = {
             "ok": True,
             "proxy": config.get("proxy"),
+            "effective_proxy": getattr(controller, "proxy", ""),
+            "proxy_source": getattr(controller, "proxy_source", ""),
             "browser_path": config.get("patchright", {}).get("browser_path") or os.environ.get("OUTLOOK_BROWSER_PATH", ""),
             "ip": ip_text,
             "title": title,
-        }, ensure_ascii=False), flush=True)
+            "ts": int(time.time()),
+        }
+        (captures / "proxy_smoke_latest.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        (captures / f"proxy_smoke_{payload['ts']}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps(payload, ensure_ascii=False), flush=True)
     finally:
         controller.clean_up(type="all_browser")
         signal.alarm(0)

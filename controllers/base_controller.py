@@ -27,7 +27,10 @@ class BaseBrowserController(ABC):
                 "OAuth2 token mode requires OUTLOOK_OAUTH_CLIENT_ID and "
                 "OUTLOOK_OAUTH_REDIRECT_URL, or config.json oauth2.client_id/oauth2.redirect_url."
             )
-        self.proxy = data['proxy']
+        env_proxy = os.environ.get("OUTLOOK_PROXY", "").strip()
+        self.proxy = env_proxy or data['proxy']
+        self.proxy_source = "OUTLOOK_PROXY" if env_proxy else "config.json"
+        print(f"[Proxy] source={self.proxy_source} value={self.proxy}", flush=True)
         self.email_suffix = data['email_suffix']
         self.patchright_browser_path = data.get("patchright", {}).get("browser_path", "")
         self.challenge_router_config = data.get("challenge_router", {})
@@ -119,7 +122,7 @@ class BaseBrowserController(ABC):
         except Exception as e:
             data["url_error"] = repr(e)
         try:
-            data["title"] = page.title(timeout=3000)
+            data["title"] = page.title()
         except Exception as e:
             data["title_error"] = repr(e)
 

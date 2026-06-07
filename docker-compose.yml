@@ -9,6 +9,7 @@ services:
     environment:
       OUTLOOK_BROWSER_PATH: /usr/bin/chromium
       OUTLOOK_HEADLESS: "1"
+      OUTLOOK_PROXY: "${OUTLOOK_PROXY:-socks5h://IPPOXY_RES.outlook-register:daytona@127.0.0.1:2260}"
       OUTLOOK_ENABLE_OAUTH2: "${OUTLOOK_ENABLE_OAUTH2:-1}"
       OUTLOOK_OAUTH_CLIENT_ID: "${OUTLOOK_OAUTH_CLIENT_ID:-9e5f94bc-e8a4-4e73-b8be-63364c29d753}"
       OUTLOOK_OAUTH_REDIRECT_URL: "${OUTLOOK_OAUTH_REDIRECT_URL:-https://localhost}"
@@ -31,6 +32,7 @@ services:
     environment:
       OUTLOOK_BROWSER_PATH: /usr/bin/chromium
       OUTLOOK_HEADLESS: "1"
+      OUTLOOK_PROXY: "${OUTLOOK_PROXY:-socks5h://IPPOXY_RES.smoke:daytona@127.0.0.1:2260}"
     volumes:
       - ./Results:/app/Results
       - ./captures:/app/captures
