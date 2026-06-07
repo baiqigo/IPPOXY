@@ -48,6 +48,18 @@ def load_candidates(include_logged=False):
     return candidates
 
 
+def load_imported_emails():
+    path = RESULTS / "oauth_imported.txt"
+    if not path.exists():
+        return set()
+    imported = set()
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        email = line.split("---", 1)[0].strip().lower()
+        if email:
+            imported.add(email)
+    return imported
+
+
 def append_line(path, line):
     path.parent.mkdir(exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
@@ -93,13 +105,26 @@ def retry_one(item, wait_seconds, poll_seconds):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--include-logged", action="store_true")
+    parser.add_argument("--email", default="", help="Retry only one full email address.")
+    parser.add_argument("--skip-imported", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--wait-seconds", type=int, default=int(os.environ.get("OUTLOOK_PENDING_READY_WAIT_SECONDS", "30")))
     parser.add_argument("--poll-seconds", type=int, default=int(os.environ.get("OUTLOOK_PENDING_READY_POLL_SECONDS", "10")))
     args = parser.parse_args()
 
-    candidates = load_candidates(include_logged=args.include_logged)[: args.limit]
-    print(f"[PendingRetry] - candidates={len(candidates)} include_logged={args.include_logged}", flush=True)
+    candidates = load_candidates(include_logged=args.include_logged)
+    if args.email:
+        wanted = args.email.strip().lower()
+        candidates = [item for item in candidates if item["email"].lower() == wanted]
+    if args.skip_imported:
+        imported = load_imported_emails()
+        candidates = [item for item in candidates if item["email"].lower() not in imported]
+    candidates = candidates[: args.limit]
+    print(
+        f"[PendingRetry] - candidates={len(candidates)} include_logged={args.include_logged} "
+        f"email_filter={args.email or '<none>'} skip_imported={args.skip_imported}",
+        flush=True,
+    )
     success = 0
     for item in candidates:
         result = retry_one(item, args.wait_seconds, args.poll_seconds)
