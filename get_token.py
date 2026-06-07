@@ -170,6 +170,108 @@ def _submit_microsoft_form(page):
     return submitted
 
 
+def _set_input_value_native(page, selector, value):
+    try:
+        return page.evaluate(
+            """({selector, value}) => {
+                const el = document.querySelector(selector);
+                if (!el) return {ok: false, reason: 'missing'};
+                el.focus();
+                const proto = el instanceof HTMLTextAreaElement
+                    ? HTMLTextAreaElement.prototype
+                    : HTMLInputElement.prototype;
+                const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+                if (descriptor && descriptor.set) descriptor.set.call(el, value);
+                else el.value = value;
+                el.dispatchEvent(new InputEvent('input', {
+                    bubbles: true,
+                    inputType: 'insertText',
+                    data: value
+                }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                el.dispatchEvent(new KeyboardEvent('keydown', {
+                    bubbles: true,
+                    key: 'Enter',
+                    code: 'Enter',
+                    keyCode: 13,
+                    which: 13
+                }));
+                el.dispatchEvent(new KeyboardEvent('keyup', {
+                    bubbles: true,
+                    key: 'Enter',
+                    code: 'Enter',
+                    keyCode: 13,
+                    which: 13
+                }));
+                return {ok: true, value_len: (el.value || '').length};
+            }""",
+            {"selector": selector, "value": value},
+        )
+    except Exception as e:
+        return {"ok": False, "error": repr(e)}
+
+
+def _submit_visible_button_by_text(page, labels):
+    try:
+        return page.evaluate(
+            """labels => {
+                const wanted = new Set(labels.map(x => String(x).trim().toLowerCase()));
+                const els = Array.from(document.querySelectorAll('button, input[type=submit], [role=button]'));
+                const isVisible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+                const candidates = els.filter(isVisible);
+                const target = candidates.find(el => {
+                    const text = (el.innerText || el.value || el.textContent || '').trim().toLowerCase();
+                    return wanted.has(text);
+                }) || candidates.find(el => {
+                    const type = (el.getAttribute('type') || '').toLowerCase();
+                    return type === 'submit';
+                });
+                if (!target) return {ok: false, reason: 'missing'};
+                target.focus();
+                target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                target.click();
+                const form = target.form || target.closest('form');
+                if (form && form.requestSubmit) {
+                    try { form.requestSubmit(target); } catch (_) { form.requestSubmit(); }
+                }
+                return {
+                    ok: true,
+                    tag: target.tagName,
+                    id: target.id,
+                    text: (target.innerText || target.value || target.textContent || '').trim()
+                };
+            }""",
+            labels,
+        )
+    except Exception as e:
+        return {"ok": False, "error": repr(e)}
+
+
+def _submit_live_login_step(page, email=None, password=None):
+    login_result = {"ok": False, "reason": "not_attempted"}
+    password_result = {"ok": False, "reason": "not_attempted"}
+    try:
+        if email and page.locator("#usernameEntry, input[name='loginfmt'], #i0116, input[type='email']").count() > 0:
+            login_result = _set_input_value_native(page, "#usernameEntry, input[name='loginfmt'], #i0116, input[type='email']", email)
+    except Exception as e:
+        login_result = {"ok": False, "error": repr(e)}
+    try:
+        if password and page.locator("#passwordEntry, input[name='passwd'], #i0118, input[type='password']").count() > 0:
+            password_result = _set_input_value_native(page, "#passwordEntry, input[name='passwd'], #i0118, input[type='password']", password)
+    except Exception as e:
+        password_result = {"ok": False, "error": repr(e)}
+    button_result = _submit_visible_button_by_text(
+        page,
+        ["下一步", "登录", "是", "接受", "同意", "Next", "Sign in", "Yes", "Accept", "Approve"],
+    )
+    try:
+        page.keyboard.press("Enter")
+    except Exception:
+        pass
+    return {"login": login_result, "password": password_result, "button": button_result}
+
+
 def _click_microsoft_next(page):
     selectors = [
         '#idSIButton9',
@@ -278,6 +380,8 @@ def handle_oauth2_form(page, email, password=None):
                     print(f"[OAuth2] - filled login via {login_selector}", flush=True)
                     js_result = _set_microsoft_login_values(page, email=email)
                     print(f"[OAuth2] - js submit after login {js_result}", flush=True)
+                    live_result = _submit_live_login_step(page, email=email)
+                    print(f"[OAuth2] - live submit after login {live_result}", flush=True)
                     _submit_microsoft_form(page)
                     filled_login = True
                     page.wait_for_timeout(1500)
@@ -293,6 +397,8 @@ def handle_oauth2_form(page, email, password=None):
                     print(f"[OAuth2] - filled password via {password_selector}", flush=True)
                     js_result = _set_microsoft_login_values(page, email=email, password=password)
                     print(f"[OAuth2] - js submit after password {js_result}", flush=True)
+                    live_result = _submit_live_login_step(page, email=email, password=password)
+                    print(f"[OAuth2] - live submit after password {live_result}", flush=True)
                     _submit_microsoft_form(page)
                     filled_password = True
                     page.wait_for_timeout(2000)
