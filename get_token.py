@@ -35,27 +35,36 @@ def _click_if_visible(locator, timeout=3000):
 
 
 def handle_oauth2_form(page, email, password=None):
-    try:
-        login = page.locator('[name="loginfmt"]')
-        if login.count() > 0:
-            login.first.fill(email, timeout=20000)
-            _click_if_visible(page.locator('#idSIButton9'), timeout=7000)
-            page.wait_for_timeout(500)
-    except Exception:
-        pass
+    filled_login = False
+    filled_password = False
+    consent_clicked = False
 
-    if password:
+    for _ in range(40):
         try:
+            login = page.locator('[name="loginfmt"]')
+            if not filled_login and login.count() > 0:
+                login.first.fill(email, timeout=3000)
+                _click_if_visible(page.locator('#idSIButton9'), timeout=3000)
+                filled_login = True
+                page.wait_for_timeout(700)
+
             password_box = page.locator('[name="passwd"], input[type="password"]')
-            if password_box.count() > 0:
+            if password and not filled_password and password_box.count() > 0:
                 password_box.first.fill(password, timeout=20000)
-                _click_if_visible(page.locator('#idSIButton9'), timeout=7000)
+                _click_if_visible(page.locator('#idSIButton9'), timeout=5000)
+                filled_password = True
                 page.wait_for_timeout(1000)
+
+            if _click_if_visible(page.locator('[data-testid="appConsentPrimaryButton"]'), timeout=2000):
+                consent_clicked = True
+
+            _click_if_visible(page.locator('#idSIButton9'), timeout=1000)
+
+            if consent_clicked:
+                return
         except Exception:
             pass
-
-    _click_if_visible(page.locator('#idSIButton9'), timeout=5000)
-    _click_if_visible(page.locator('[data-testid="appConsentPrimaryButton"]'), timeout=10000)
+        page.wait_for_timeout(500)
 
 
 def get_access_token(page, email, password=None, max_retries=3):
