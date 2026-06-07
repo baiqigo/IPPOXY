@@ -73,6 +73,7 @@ services:
     image: outlook-register-lainsnl:staging
     network_mode: host
     environment:
+      OUTLOOK_OAUTH_CLIENT_ID: "${OUTLOOK_OAUTH_CLIENT_ID:-9e5f94bc-e8a4-4e73-b8be-63364c29d753}"
       MAIL_HUB_URL: "${MAIL_HUB_URL:-http://127.0.0.1:3100}"
       MAIL_HUB_API_SECRET: "${MAIL_HUB_API_SECRET:-}"
       MAILPILOT_TOKEN: "${MAILPILOT_TOKEN:-}"
