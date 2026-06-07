@@ -20,8 +20,10 @@ services:
     shm_size: "1gb"
     environment:
       OUTLOOK_BROWSER_PATH: /usr/bin/chromium
+      OUTLOOK_HEADLESS: "1"
     volumes:
       - ./Results:/app/Results
       - ./captures:/app/captures
       - ./.profiles:/app/.profiles
+    entrypoint: []
     command: ["python", "-u", "smoke_browser.py"]

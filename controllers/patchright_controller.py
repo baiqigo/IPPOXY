@@ -53,10 +53,11 @@ class PatchrightController(BaseBrowserController):
             browser_path = self._browser_path()
             if browser_path:
                 launch_kwargs["executable_path"] = browser_path
+            headless = os.environ.get("OUTLOOK_HEADLESS", "").strip().lower() in ("1", "true", "yes")
 
             b = p.chromium.launch_persistent_context(
                 user_data_dir=profile_dir,
-                headless=False,
+                headless=headless,
                 args=[
                     '--lang=zh-CN',
                     '--no-sandbox',
