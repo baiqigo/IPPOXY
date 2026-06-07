@@ -63,7 +63,8 @@ def upsert_subscription() -> str:
     retry_without = ("incremental_alive_nodes",)
     if existing:
         sub_id = existing["id"]
-        request("PATCH", f"/subscriptions/{sub_id}", body, retry_without=retry_without)
+        patch_body = {k: v for k, v in body.items() if k != "source_type"}
+        request("PATCH", f"/subscriptions/{sub_id}", patch_body, retry_without=retry_without)
     else:
         created = request("POST", "/subscriptions", body, retry_without=retry_without)
         sub_id = created["id"] if isinstance(created, dict) else find_by_name("/subscriptions?limit=200", body["name"])["id"]
