@@ -68,19 +68,44 @@ class PatchrightController(BaseBrowserController):
         print(f"[Captcha] - using iframe index={idx} score={score} meta={meta}", flush=True)
         return frame, meta
 
-    def _click_locator_or_box(self, page, locator, label):
+    def _press_point(self, page, x, y, label):
+        page.mouse.move(x + random.randint(-3, 3), y + random.randint(-3, 3), steps=random.randint(8, 15))
+        page.wait_for_timeout(random.randint(120, 350))
+        page.mouse.down()
+        page.wait_for_timeout(random.randint(650, 1400))
+        page.mouse.up()
+        print(f"[Captcha] - pressed {label} at x={x:.1f}, y={y:.1f}", flush=True)
+
+    def _visual_challenge_press(self, page, frame_meta, label):
+        box = (frame_meta or {}).get("box") or {}
+        x0 = float(box.get("x", 0))
+        y0 = float(box.get("y", 0))
+        width = float(box.get("width", 360))
+        height = float(box.get("height", 90))
+        y = y0 + min(max(height * 0.58, 48), height - 12)
+        if label == "accessibility_challenge":
+            x = x0 + min(max(width * 0.18, 45), width - 20)
+        else:
+            x = x0 + min(max(width * 0.57, 160), width - 30)
+        self._press_point(page, x, y, f"visual_{label}")
+
+    def _click_locator_or_box(self, page, locator, label, frame_meta=None):
         try:
             locator.first.click(timeout=8000)
             print(f"[Captcha] - clicked {label} by locator", flush=True)
             return True
         except Exception as e:
             print(f"[Captcha] - locator click failed for {label}: {e}", flush=True)
-        box = locator.first.bounding_box(timeout=8000)
-        print(f"[Captcha] - {label} fallback box={box}", flush=True)
-        x = box['x'] + box['width'] / 2 + random.randint(-8, 8)
-        y = box['y'] + box['height'] / 2 + random.randint(-8, 8)
-        page.mouse.click(x, y)
-        print(f"[Captcha] - clicked {label} by page coordinates", flush=True)
+        try:
+            box = locator.first.bounding_box(timeout=3000)
+            print(f"[Captcha] - {label} fallback box={box}", flush=True)
+            x = box['x'] + box['width'] / 2 + random.randint(-8, 8)
+            y = box['y'] + box['height'] / 2 + random.randint(-8, 8)
+            self._press_point(page, x, y, f"box_{label}")
+            return True
+        except Exception as e:
+            print(f"[Captcha] - box fallback failed for {label}: {e}", flush=True)
+        self._visual_challenge_press(page, frame_meta, label)
         return True
 
     def _browser_path(self):
@@ -170,7 +195,7 @@ class PatchrightController(BaseBrowserController):
                 print(f"[Captcha] - accessibility count={loc.count()}", flush=True)
             except Exception as e:
                 print(f"[Captcha] - accessibility count error={e}", flush=True)
-            self._click_locator_or_box(page, loc, "accessibility_challenge")
+            self._click_locator_or_box(page, loc, "accessibility_challenge", frame_meta)
             page.wait_for_timeout(random.randint(400, 900))
 
             loc2 = challenge_frame.locator('[aria-label="再次按下"]')
@@ -178,7 +203,7 @@ class PatchrightController(BaseBrowserController):
                 print(f"[Captcha] - press_again count={loc2.count()}", flush=True)
             except Exception as e:
                 print(f"[Captcha] - press_again count error={e}", flush=True)
-            self._click_locator_or_box(page, loc2, "press_again")
+            self._click_locator_or_box(page, loc2, "press_again", frame_meta)
 
             try:
 
@@ -201,7 +226,10 @@ class PatchrightController(BaseBrowserController):
                     if page.get_by_text('取消').count() > 0:
                         break
                     self.capture_debug_state(page, f"captcha_attempt_{attempt + 1}_retry_text_wait")
-                    challenge_frame.get_by_text("请再试一次").wait_for(timeout=15000)
+                    try:
+                        challenge_frame.get_by_text("请再试一次").wait_for(timeout=5000)
+                    except Exception:
+                        pass
                     continue
 
             except:
