@@ -516,6 +516,7 @@ def _load_oauth_settings(email):
     prompt = os.environ.get("OUTLOOK_OAUTH_PROMPT", "consent").strip()
     domain_hint = os.environ.get("OUTLOOK_OAUTH_DOMAIN_HINT", "").strip()
     _email_suffix = data['email_suffix']
+    email_full = email if "@" in email else f"{email}{_email_suffix}"
     if not client_id or not redirect_url:
         print(
             "[Error: OAuth2] - missing client_id/redirect_url. "
@@ -533,7 +534,7 @@ def _load_oauth_settings(email):
         'redirect_uri': redirect_url,
         'scope': ' '.join(SCOPES),
         'response_mode': 'query',
-        'login_hint': f"{email}{_email_suffix}",
+        'login_hint': email_full,
         'code_challenge': code_challenge,
         'code_challenge_method': 'S256'
     }
@@ -551,7 +552,7 @@ def _load_oauth_settings(email):
         "tenant": tenant,
         "code_verifier": code_verifier,
         "authorize_url": authorize_url,
-        "email_full": f"{email}{_email_suffix}",
+        "email_full": email_full,
     }
 
 
@@ -596,6 +597,18 @@ def _exchange_auth_code(settings, auth_code):
 
 def _session_from_page_context(page):
     session = requests.Session()
+    if page is None:
+        session.headers.update({
+            "User-Agent": os.environ.get(
+                "OUTLOOK_OAUTH_USER_AGENT",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        })
+        print("[OAuth2:Protocol] - no browser page; using protocol-only session", flush=True)
+        return session
     try:
         user_agent = page.evaluate("() => navigator.userAgent")
     except Exception:
