@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 from pathlib import Path
 
 from mailhub_client import import_outlook_account
@@ -57,7 +58,7 @@ def main():
 
     with open(ROOT / "config.json", "r", encoding="utf-8") as f:
         config = json.load(f)
-    client_id = config["oauth2"]["client_id"].strip()
+    client_id = os.environ.get("OUTLOOK_OAUTH_CLIENT_ID", "").strip() or config["oauth2"]["client_id"].strip()
 
     accounts = load_token_accounts(Path(args.path))
     if args.email:

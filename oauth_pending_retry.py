@@ -120,7 +120,8 @@ def retry_one(item, wait_seconds, poll_seconds, dry_run=False, write_token=True,
             "stage": "mailhub_import",
             "mailhub": mailhub_result,
         }
-    append_line(RESULTS / "oauth_imported.txt", f"{email}---{int(time.time())}---source={item['source']}")
+    if import_mailhub:
+        append_line(RESULTS / "oauth_imported.txt", f"{email}---{int(time.time())}---source={item['source']}")
     return {"email": email, "ok": True, "stage": "done", "mailhub": mailhub_result}
 
 
