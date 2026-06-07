@@ -69,13 +69,26 @@ class PatchrightController(BaseBrowserController):
         print(f"[Captcha] - using iframe index={idx} score={score} meta={meta}", flush=True)
         return frame, meta
 
-    def _press_point(self, page, x, y, label, hold_ms=None):
+    def _press_point(self, page, x, y, label, hold_ms=None, micro_jitter=False):
         page.mouse.move(x + random.randint(-3, 3), y + random.randint(-3, 3), steps=random.randint(8, 15))
         page.wait_for_timeout(random.randint(120, 350))
         page.mouse.down()
         if hold_ms is None:
             hold_ms = random.randint(650, 1400)
-        page.wait_for_timeout(hold_ms)
+        if micro_jitter and hold_ms > 1200:
+            elapsed = 0
+            while elapsed < hold_ms:
+                step_ms = min(random.randint(700, 1300), hold_ms - elapsed)
+                page.wait_for_timeout(step_ms)
+                elapsed += step_ms
+                if elapsed < hold_ms:
+                    page.mouse.move(
+                        x + random.uniform(-1.5, 1.5),
+                        y + random.uniform(-1.2, 1.2),
+                        steps=random.randint(2, 4),
+                    )
+        else:
+            page.wait_for_timeout(hold_ms)
         page.mouse.up()
         print(f"[Captcha] - pressed {label} at x={x:.1f}, y={y:.1f}, hold_ms={hold_ms}", flush=True)
 
@@ -85,13 +98,47 @@ class PatchrightController(BaseBrowserController):
         y0 = float(box.get("y", 0))
         width = float(box.get("width", 360))
         height = float(box.get("height", 90))
-        y = y0 + min(max(height * 0.58, 48), height - 12)
+        y = y0 + min(max(height * 0.60, 48), height - 12)
         if label == "accessibility_challenge":
             x = x0 + min(max(width * 0.18, 45), width - 20)
+            hold_ms = random.randint(900, 1600)
         else:
-            x = x0 + min(max(width * 0.57, 160), width - 30)
-        hold_ms = random.randint(4200, 6200) if label == "press_again" else random.randint(900, 1600)
-        self._press_point(page, x, y, f"visual_{label}", hold_ms=hold_ms)
+            x = x0 + min(max(width * 0.56, 155), width - 30)
+            hold_ms = random.randint(10200, 13200)
+        self._press_point(page, x, y, f"visual_{label}", hold_ms=hold_ms, micro_jitter=(label == "press_again"))
+
+    def _keyboard_challenge_press(self, page, frame_meta, hold_ms=None):
+        box = (frame_meta or {}).get("box") or {}
+        x0 = float(box.get("x", 0))
+        y0 = float(box.get("y", 0))
+        width = float(box.get("width", 360))
+        height = float(box.get("height", 90))
+        x = x0 + min(max(width * 0.50, 120), width - 30)
+        y = y0 + min(max(height * 0.55, 44), height - 12)
+        if hold_ms is None:
+            hold_ms = random.randint(10500, 12500)
+        try:
+            page.mouse.click(x, y)
+            page.wait_for_timeout(random.randint(250, 600))
+        except Exception as e:
+            print(f"[Captcha] - keyboard focus click failed: {e}", flush=True)
+        try:
+            page.keyboard.down("Enter")
+            page.wait_for_timeout(hold_ms)
+            page.keyboard.up("Enter")
+            print(f"[Captcha] - held Enter on challenge, hold_ms={hold_ms}", flush=True)
+            return True
+        except Exception as e:
+            print(f"[Captcha] - keyboard challenge press failed: {e}", flush=True)
+            try:
+                page.keyboard.press("Enter")
+                page.wait_for_timeout(hold_ms)
+                page.keyboard.press("Enter")
+                print(f"[Captcha] - pressed Enter pair on challenge, wait_ms={hold_ms}", flush=True)
+                return True
+            except Exception as e2:
+                print(f"[Captcha] - Enter pair fallback failed: {e2}", flush=True)
+                return False
 
     def _click_locator_or_box(self, page, locator, label, frame_meta=None):
         try:
@@ -165,6 +212,11 @@ class PatchrightController(BaseBrowserController):
                 headless=headless,
                 args=[
                     '--lang=zh-CN',
+                    '--accept-lang=zh-CN,zh',
+                    '--force-local-ntp=zh-CN',
+                    '--no-first-run',
+                    '--no-default-browser-check',
+                    '--disable-popup-blocking',
                     '--no-sandbox',
                     '--disable-dev-shm-usage',
                     '--disable-blink-features=AutomationControlled',

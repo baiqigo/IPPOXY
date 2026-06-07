@@ -9,6 +9,57 @@ class MicrosoftPressProvider(ChallengeProvider):
     def can_handle(self, challenge_type, evidence):
         return challenge_type == "microsoft_press"
 
+    def _challenge_gone(self, page, challenge_frame):
+        try:
+            if page.get_by_text("一些异常活动").count() > 0:
+                return False
+            if page.get_by_text("取消").count() > 0:
+                return True
+        except Exception:
+            pass
+        try:
+            if challenge_frame.locator(".draw").count() == 0:
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _rate_limited(self, page):
+        try:
+            return (
+                page.get_by_text("一些异常活动").count() > 0
+                or page.get_by_text("此站点正在维护，暂时无法使用，请稍后重试。").count() > 0
+            )
+        except Exception:
+            return False
+
+    def _wait_after_press(self, page, controller, challenge_frame, attempt, suffix):
+        try:
+            challenge_frame.locator(".draw").wait_for(state="detached", timeout=15000)
+        except Exception as e:
+            print(f"[ChallengeRouter] - .draw did not detach after {suffix}: {e}", flush=True)
+
+        try:
+            page.locator('[role="status"][aria-label="正在加载..."]').wait_for(timeout=5000)
+            page.wait_for_timeout(8000)
+        except Exception:
+            page.wait_for_timeout(1800)
+
+        if self._rate_limited(page):
+            controller.capture_debug_state(page, f"router_{self.name}_{suffix}_rate_limited")
+            return "rate_limited"
+
+        if self._challenge_gone(page, challenge_frame):
+            return "cleared"
+
+        try:
+            challenge_frame.get_by_text("请再试一次").wait_for(timeout=3500)
+        except Exception:
+            pass
+
+        controller.capture_debug_state(page, f"router_{self.name}_attempt_{attempt + 1}_{suffix}_still_visible")
+        return "retry"
+
     def solve(self, page, controller, evidence=None):
         challenge_type = (evidence or {}).get("type", "microsoft_press")
         try:
@@ -56,65 +107,44 @@ class MicrosoftPressProvider(ChallengeProvider):
                 print("[ChallengeRouter] - no DOM buttons found; visual long-press on hold button", flush=True)
                 controller._visual_challenge_press(page, frame_meta, "press_again")
 
-            try:
-                challenge_frame.locator(".draw").wait_for(state="detached", timeout=12000)
-                try:
-                    page.locator('[role="status"][aria-label="正在加载..."]').wait_for(timeout=5000)
-                    page.wait_for_timeout(8000)
-                    if (
-                        page.get_by_text("一些异常活动").count()
-                        or page.get_by_text("此站点正在维护，暂时无法使用，请稍后重试。").count() > 0
-                    ):
-                        controller.capture_debug_state(page, f"router_{self.name}_rate_limited")
-                        return ChallengeResult(
-                            status="failed",
-                            provider=self.name,
-                            challenge_type=challenge_type,
-                            reason="rate limited or abnormal activity after challenge",
-                            evidence=evidence or {},
-                        )
-                    if challenge_frame.locator('[aria-label="可访问性挑战"]').count() > 0:
-                        controller.capture_debug_state(page, f"router_{self.name}_attempt_{attempt + 1}_still_visible")
-                        continue
-                    return ChallengeResult(
-                        status="cleared",
-                        provider=self.name,
-                        challenge_type=challenge_type,
-                        reason="challenge detached and no retry state detected",
-                        evidence=evidence or {},
-                    )
-                except Exception:
-                    if page.get_by_text("取消").count() > 0:
-                        return ChallengeResult(
-                            status="cleared",
-                            provider=self.name,
-                            challenge_type=challenge_type,
-                            reason="cancel text present after challenge flow",
-                            evidence=evidence or {},
-                        )
-                    controller.capture_debug_state(page, f"router_{self.name}_attempt_{attempt + 1}_retry_wait")
-                    try:
-                        challenge_frame.get_by_text("请再试一次").wait_for(timeout=5000)
-                    except Exception:
-                        pass
-                    continue
-            except Exception as e:
-                if page.get_by_text("取消").count() > 0:
-                    return ChallengeResult(
-                        status="cleared",
-                        provider=self.name,
-                        challenge_type=challenge_type,
-                        reason="cancel text present after outer failure",
-                        evidence=evidence or {},
-                    )
-                controller.capture_debug_state(page, f"router_{self.name}_attempt_{attempt + 1}_outer_failure")
+            wait_result = self._wait_after_press(page, controller, challenge_frame, attempt, "mouse")
+            if wait_result == "cleared":
+                return ChallengeResult(
+                    status="cleared",
+                    provider=self.name,
+                    challenge_type=challenge_type,
+                    reason="challenge cleared after mouse press",
+                    evidence=evidence or {},
+                )
+            if wait_result == "rate_limited":
                 return ChallengeResult(
                     status="failed",
                     provider=self.name,
                     challenge_type=challenge_type,
-                    reason=f"outer challenge wait failed: {e}",
+                    reason="rate limited or abnormal activity after mouse press",
                     evidence=evidence or {},
                 )
+
+            if accessibility_count == 0 and press_again_count == 0:
+                print("[ChallengeRouter] - mouse press did not clear; trying keyboard hold fallback", flush=True)
+                controller._keyboard_challenge_press(page, frame_meta)
+                wait_result = self._wait_after_press(page, controller, challenge_frame, attempt, "keyboard")
+                if wait_result == "cleared":
+                    return ChallengeResult(
+                        status="cleared",
+                        provider=self.name,
+                        challenge_type=challenge_type,
+                        reason="challenge cleared after keyboard fallback",
+                        evidence=evidence or {},
+                    )
+                if wait_result == "rate_limited":
+                    return ChallengeResult(
+                        status="failed",
+                        provider=self.name,
+                        challenge_type=challenge_type,
+                        reason="rate limited or abnormal activity after keyboard fallback",
+                        evidence=evidence or {},
+                    )
 
         controller.capture_debug_state(page, f"router_{self.name}_attempts_exhausted")
         return ChallengeResult(
