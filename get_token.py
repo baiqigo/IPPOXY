@@ -6,8 +6,10 @@ import secrets
 import requests
 from datetime import datetime
 from urllib.request import getproxies
-from urllib.parse import quote, parse_qs
+from urllib.parse import quote, parse_qs, urlparse
 import os
+import time
+from pathlib import Path
 
 def get_proxy():
     proxies = getproxies()
@@ -32,6 +34,112 @@ def _click_if_visible(locator, timeout=3000):
     except Exception:
         pass
     return False
+
+
+def _capture_oauth_state(page, label):
+    captures_dir = Path(__file__).resolve().parent / "captures"
+    captures_dir.mkdir(exist_ok=True)
+    ts = int(time.time())
+    safe_label = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in label)[:80]
+    base = captures_dir / f"oauth_{ts}_{safe_label}"
+    data = {"label": label, "timestamp": ts}
+
+    try:
+        data["url"] = page.url
+    except Exception as e:
+        data["url_error"] = repr(e)
+    try:
+        data["title"] = page.title()
+    except Exception as e:
+        data["title_error"] = repr(e)
+    try:
+        data["frames"] = [{"name": frame.name, "url": frame.url} for frame in page.frames]
+    except Exception as e:
+        data["frames_error"] = repr(e)
+    try:
+        data["inputs"] = page.locator("input, textarea, select").evaluate_all(
+            """els => els.slice(0, 60).map(el => ({
+                tag: el.tagName,
+                type: el.getAttribute('type'),
+                name: el.getAttribute('name'),
+                id: el.getAttribute('id'),
+                aria: el.getAttribute('aria-label'),
+                placeholder: el.getAttribute('placeholder'),
+                value_len: (el.value || '').length,
+                visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+            }))"""
+        )
+    except Exception as e:
+        data["inputs_error"] = repr(e)
+    try:
+        data["buttons"] = page.locator("button, input[type=submit], [role=button]").evaluate_all(
+            """els => els.slice(0, 80).map(el => ({
+                tag: el.tagName,
+                type: el.getAttribute('type'),
+                name: el.getAttribute('name'),
+                id: el.getAttribute('id'),
+                aria: el.getAttribute('aria-label'),
+                text: (el.innerText || el.value || el.textContent || '').slice(0, 120),
+                visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+            }))"""
+        )
+    except Exception as e:
+        data["buttons_error"] = repr(e)
+    try:
+        data["texts"] = {
+            text: page.get_by_text(text).count()
+            for text in (
+                "登录到您的帐户",
+                "输入密码",
+                "保持登录状态",
+                "接受",
+                "同意",
+                "Approve",
+                "Accept",
+                "Stay signed in",
+                "Sign in",
+                "Next",
+            )
+        }
+    except Exception as e:
+        data["texts_error"] = repr(e)
+    try:
+        page.screenshot(path=str(base.with_suffix(".png")), full_page=True, timeout=8000)
+    except Exception as e:
+        data["screenshot_error"] = repr(e)
+    try:
+        with open(base.with_suffix(".json"), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        print(f"[OAuth2] - saved state {base}.json", flush=True)
+    except Exception as e:
+        print(f"[OAuth2] - save state failed: {e}", flush=True)
+
+
+def _url_has_auth_code(url):
+    try:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        return bool(params.get("code"))
+    except Exception:
+        return False
+
+
+def _extract_auth_code(url):
+    parsed = urlparse(url)
+    return parse_qs(parsed.query)["code"][0]
+
+
+def _is_redirect_navigation(url, redirect_url):
+    if not url or not redirect_url:
+        return False
+    if url.startswith(redirect_url):
+        return True
+    try:
+        current = urlparse(url)
+        expected = urlparse(redirect_url)
+        return current.scheme == expected.scheme and current.netloc == expected.netloc and current.path == expected.path
+    except Exception:
+        return False
 
 
 def _submit_microsoft_form(page):
@@ -60,6 +168,34 @@ def _submit_microsoft_form(page):
     except Exception:
         pass
     return submitted
+
+
+def _click_microsoft_next(page):
+    selectors = [
+        '#idSIButton9',
+        '#idSubmit_ProofUp_Redirect',
+        'input[type="submit"]',
+        'button[type="submit"]',
+    ]
+    for selector in selectors:
+        if _click_if_visible(page.locator(selector), timeout=2500):
+            return True
+    labels = [
+        "下一步",
+        "登录",
+        "是",
+        "接受",
+        "同意",
+        "Next",
+        "Sign in",
+        "Yes",
+        "Accept",
+        "Approve",
+    ]
+    for label in labels:
+        if _click_if_visible(page.get_by_text(label, exact=True), timeout=2000):
+            return True
+    return _submit_microsoft_form(page)
 
 
 def _set_microsoft_login_values(page, email=None, password=None):
@@ -164,7 +300,7 @@ def handle_oauth2_form(page, email, password=None):
             if _click_if_visible(page.locator('[data-testid="appConsentPrimaryButton"]'), timeout=2000):
                 consent_clicked = True
 
-            _submit_microsoft_form(page)
+            _click_microsoft_next(page)
 
             if consent_clicked:
                 return
@@ -199,7 +335,9 @@ def _try_get_access_token(page, email, password=None, attempt=1):
     SCOPES = env_scopes.split() if env_scopes else data['oauth2']['Scopes']
     client_id = os.environ.get("OUTLOOK_OAUTH_CLIENT_ID", "").strip() or data['oauth2']['client_id'].strip()
     redirect_url = os.environ.get("OUTLOOK_OAUTH_REDIRECT_URL", "").strip() or data['oauth2']['redirect_url'].strip()
+    tenant = os.environ.get("OUTLOOK_OAUTH_TENANT", "").strip() or str(data['oauth2'].get('tenant', 'consumers')).strip() or "consumers"
     prompt = os.environ.get("OUTLOOK_OAUTH_PROMPT", "consent").strip()
+    domain_hint = os.environ.get("OUTLOOK_OAUTH_DOMAIN_HINT", "").strip()
     _email_suffix = data['email_suffix']
     if not client_id or not redirect_url:
         print(
@@ -218,23 +356,38 @@ def _try_get_access_token(page, email, password=None, attempt=1):
         'redirect_uri': redirect_url,
         'scope': ' '.join(SCOPES),
         'response_mode': 'query',
+        'login_hint': f"{email}{_email_suffix}",
         'code_challenge': code_challenge,
         'code_challenge_method': 'S256'
     }
     if prompt:
         params['prompt'] = prompt
+    if domain_hint:
+        params['domain_hint'] = domain_hint
 
-    authorize_url = f"https://login.microsoftonline.com/common/oauth2/v2.0/authorize?{'&'.join(f'{k}={quote(v)}' for k, v in params.items())}"
-    print(f"[OAuth2] - authorize attempt {attempt}", flush=True)
+    authorize_url = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize?{'&'.join(f'{k}={quote(v)}' for k, v in params.items())}"
+    print(f"[OAuth2] - authorize attempt {attempt} tenant={tenant}", flush=True)
 
     captured_url = None
 
     def on_request(request):
         nonlocal captured_url
-        if redirect_url in request.url and 'code=' in request.url:
+        if _is_redirect_navigation(request.url, redirect_url) and _url_has_auth_code(request.url):
             captured_url = request.url
+            print("[OAuth2] - captured code from request", flush=True)
+
+    def on_frame_navigated(frame):
+        nonlocal captured_url
+        try:
+            url = frame.url
+        except Exception:
+            return
+        if _is_redirect_navigation(url, redirect_url) and _url_has_auth_code(url):
+            captured_url = url
+            print("[OAuth2] - captured code from frame navigation", flush=True)
 
     page.on("request", on_request)
+    page.on("framenavigated", on_frame_navigated)
 
     try:
         try:
@@ -253,12 +406,17 @@ def _try_get_access_token(page, email, password=None, attempt=1):
 
         for i in range(400):
             page.wait_for_timeout(100)
+            if _is_redirect_navigation(page.url, redirect_url) and _url_has_auth_code(page.url):
+                captured_url = page.url
+                print("[OAuth2] - captured code from current page url", flush=True)
+                break
             if captured_url:
                 break
 
             if i > 0 and i % refresh_interval == 0:
                 if refresh_count >= max_refreshes:
                     url, title = _safe_page_state(page)
+                    _capture_oauth_state(page, f"code_not_captured_refresh_limit_attempt_{attempt}")
                     print(f"[Error: OAuth2] - code not captured before refresh limit url={url} title={title}", flush=True)
                     return False, False, False
                 refresh_count += 1
@@ -268,22 +426,25 @@ def _try_get_access_token(page, email, password=None, attempt=1):
                     pass
         else:
             url, title = _safe_page_state(page)
+            _capture_oauth_state(page, f"authorization_code_not_captured_attempt_{attempt}")
             print(f"[Error: OAuth2] - authorization code not captured url={url} title={title}", flush=True)
             return False, False, False
 
     finally:
         page.remove_listener("request", on_request)
+        page.remove_listener("framenavigated", on_frame_navigated)
 
     if not captured_url or 'code=' not in captured_url:
         url, title = _safe_page_state(page)
+        _capture_oauth_state(page, f"missing_captured_code_attempt_{attempt}")
         print(f"[Error: OAuth2] - missing captured code url={url} title={title}", flush=True)
         return False, False, False
 
-    auth_code = parse_qs(captured_url.split('?')[1])['code'][0]
+    auth_code = _extract_auth_code(captured_url)
 
     try:
         response = requests.post(
-            'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+            f'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token',
             data={
                 'client_id': client_id,
                 'code': auth_code,

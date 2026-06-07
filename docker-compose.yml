@@ -13,6 +13,7 @@ services:
       OUTLOOK_ENABLE_OAUTH2: "${OUTLOOK_ENABLE_OAUTH2:-1}"
       OUTLOOK_OAUTH_CLIENT_ID: "${OUTLOOK_OAUTH_CLIENT_ID:-9e5f94bc-e8a4-4e73-b8be-63364c29d753}"
       OUTLOOK_OAUTH_REDIRECT_URL: "${OUTLOOK_OAUTH_REDIRECT_URL:-https://localhost}"
+      OUTLOOK_OAUTH_TENANT: "${OUTLOOK_OAUTH_TENANT:-consumers}"
       OUTLOOK_OAUTH_SCOPES: "${OUTLOOK_OAUTH_SCOPES:-https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/POP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access}"
       OUTLOOK_OAUTH_PROMPT: "${OUTLOOK_OAUTH_PROMPT:-consent}"
       MAIL_HUB_URL: "${MAIL_HUB_URL:-http://127.0.0.1:3100}"
