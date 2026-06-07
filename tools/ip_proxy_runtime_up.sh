@@ -9,7 +9,9 @@ XRAY_CONF="${CONF_DIR}/xray_turn_pool_25.generated.json"
 XRAY_PID="${RUNTIME}/xray-turn-pool-25.pid"
 
 mkdir -p "$LOG_DIR" "$CONF_DIR" "$ROOT/.runtime/resin/cache" "$ROOT/.runtime/resin/state" "$ROOT/.runtime/resin/log"
-cp "$ROOT/docs/ip-proxy/resin/xray_turn_pool_25.generated.json" "$XRAY_CONF"
+if [ ! -f "$XRAY_CONF" ]; then
+  cp "$ROOT/docs/ip-proxy/resin/xray_turn_pool_25.generated.json" "$XRAY_CONF"
+fi
 
 stop_pid_file() {
   if [ -f "$XRAY_PID" ]; then
