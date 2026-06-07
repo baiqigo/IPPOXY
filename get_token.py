@@ -34,6 +34,34 @@ def _click_if_visible(locator, timeout=3000):
     return False
 
 
+def _submit_microsoft_form(page):
+    submitted = False
+    for selector in ['#idSIButton9', 'input[type="submit"]', 'button[type="submit"]']:
+        try:
+            locator = page.locator(selector)
+            if locator.count() > 0:
+                locator.first.click(timeout=3000)
+                submitted = True
+                break
+        except Exception:
+            pass
+    for selector in ['#idSIButton9', 'input[type="submit"]', 'button[type="submit"]']:
+        try:
+            locator = page.locator(selector)
+            if locator.count() > 0:
+                locator.first.evaluate("el => el.click()")
+                submitted = True
+                break
+        except Exception:
+            pass
+    try:
+        page.keyboard.press("Enter")
+        submitted = True
+    except Exception:
+        pass
+    return submitted
+
+
 def _fill_first_visible(page, selectors, value, timeout=3000):
     for selector in selectors:
         try:
@@ -55,7 +83,7 @@ def _log_oauth_controls(page):
                 name: el.getAttribute('name'),
                 id: el.getAttribute('id'),
                 aria: el.getAttribute('aria-label'),
-                text: (el.innerText || el.value || '').slice(0, 80)
+                text: el.tagName === 'BUTTON' ? (el.innerText || '').slice(0, 80) : '<redacted>'
             }))"""
         )
         print(f"[OAuth2] - visible controls snapshot: {controls}", flush=True)
@@ -79,9 +107,9 @@ def handle_oauth2_form(page, email, password=None):
                 )
                 if login_selector:
                     print(f"[OAuth2] - filled login via {login_selector}", flush=True)
-                    _click_if_visible(page.locator('#idSIButton9, input[type="submit"], button[type="submit"]'), timeout=3000)
+                    _submit_microsoft_form(page)
                     filled_login = True
-                    page.wait_for_timeout(700)
+                    page.wait_for_timeout(1500)
 
             if password and not filled_password:
                 password_selector = _fill_first_visible(
@@ -92,14 +120,14 @@ def handle_oauth2_form(page, email, password=None):
                 )
                 if password_selector:
                     print(f"[OAuth2] - filled password via {password_selector}", flush=True)
-                    _click_if_visible(page.locator('#idSIButton9, input[type="submit"], button[type="submit"]'), timeout=5000)
+                    _submit_microsoft_form(page)
                     filled_password = True
-                    page.wait_for_timeout(1000)
+                    page.wait_for_timeout(2000)
 
             if _click_if_visible(page.locator('[data-testid="appConsentPrimaryButton"]'), timeout=2000):
                 consent_clicked = True
 
-            _click_if_visible(page.locator('#idSIButton9, input[type="submit"], button[type="submit"]'), timeout=1000)
+            _submit_microsoft_form(page)
 
             if consent_clicked:
                 return
