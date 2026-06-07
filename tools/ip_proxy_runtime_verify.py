@@ -11,7 +11,15 @@ from pathlib import Path
 
 
 ROOT = Path(os.environ.get("IPPOXY_ROOT", "/home/daytona/IPPOXY"))
-MAPPING = ROOT / "docs/ip-proxy/research/runtime/turn_xray_pool_20260608.json"
+RUNTIME = Path(os.environ.get("IP_PROXY_RUNTIME_DIR", ROOT / ".runtime/ip-proxy"))
+MAPPING = Path(
+    os.environ.get(
+        "IP_PROXY_MAPPING_FILE",
+        RUNTIME / "turn_xray_pool_20260608.json",
+    )
+)
+if not MAPPING.exists():
+    MAPPING = ROOT / "docs/ip-proxy/research/runtime/turn_xray_pool_20260608.json"
 
 
 def curl(args: list[str], timeout: int = 25) -> str:
@@ -58,6 +66,7 @@ def main() -> None:
 
     result = {
         "ts": int(time.time()),
+        "mapping_file": str(MAPPING),
         "ports_ok": sum(1 for item in port_results if item["ok"]),
         "ports_total": len(port_results),
         "resin_ok": sum(1 for item in resin_tests if item["ok"]),
@@ -66,8 +75,16 @@ def main() -> None:
         "resin_tests": resin_tests,
         "health": health,
     }
+    captures = ROOT / "captures"
+    captures.mkdir(parents=True, exist_ok=True)
+    (captures / "ip_runtime_verify_latest.json").write_text(
+        json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    if result["ports_ok"] < 1 or result["resin_ok"] < 1:
+    min_ports_ok = int(os.environ.get("IP_PROXY_MIN_PORTS_OK", "1"))
+    min_resin_ok = int(os.environ.get("IP_PROXY_MIN_RESIN_OK", "1"))
+    if result["ports_ok"] < min_ports_ok or result["resin_ok"] < min_resin_ok:
         sys.exit(1)
 
 

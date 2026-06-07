@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(os.environ.get("IPPOXY_ROOT", "/home/daytona/IPPOXY"))
 BASE = os.environ.get("RESIN_BASE_URL", "http://127.0.0.1:2260/api/v1").rstrip("/")
 ADMIN_TOKEN = os.environ.get("RESIN_ADMIN_TOKEN", "daytona-admin")
+RUNTIME = Path(os.environ.get("IP_PROXY_RUNTIME_DIR", ROOT / ".runtime/ip-proxy"))
 
 
 def request(method: str, path: str, body: dict | None = None, retry_without: tuple[str, ...] = ()) -> object:
@@ -48,7 +49,15 @@ def find_by_name(path: str, name: str) -> dict | None:
 
 
 def upsert_subscription() -> str:
-    content = (ROOT / "docs/ip-proxy/resin/turn_xray_pool_25.local.txt").read_text(encoding="utf-8")
+    content_file = Path(
+        os.environ.get(
+            "RESIN_SUBSCRIPTION_FILE",
+            RUNTIME / "resin/turn_xray_pool_25.local.txt",
+        )
+    )
+    if not content_file.exists():
+        content_file = ROOT / "docs/ip-proxy/resin/turn_xray_pool_25.local.txt"
+    content = content_file.read_text(encoding="utf-8")
     body = {
         "name": "ippoxy-turn-xray-local",
         "source_type": "local",

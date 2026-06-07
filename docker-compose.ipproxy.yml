@@ -6,7 +6,7 @@ services:
     network_mode: host
     command: ["run", "-config", "/usr/local/etc/xray/config.json"]
     volumes:
-      - ./docs/ip-proxy/resin/xray_turn_pool_25.generated.json:/usr/local/etc/xray/config.json:ro
+      - ./.runtime/ip-proxy/conf/xray_turn_pool_25.generated.json:/usr/local/etc/xray/config.json:ro
       - ./.runtime/ip-proxy/logs:/var/log/xray
 
   resin:

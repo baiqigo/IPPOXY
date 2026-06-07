@@ -33,4 +33,15 @@ fi
   --run-id "$RUN_ID" \
   --input "docs/ip-proxy/research/runtime/proxy_candidate_check_${RUN_ID}.json"
 
+POOL_REFRESH_JSON="$("$PYTHON_BIN" tools/ip_proxy_pool_refresh.py \
+  --input "docs/ip-proxy/resin/clean_candidates_classified.latest.json")"
+echo "$POOL_REFRESH_JSON"
+
+POOL_CHANGED="$("$PYTHON_BIN" -c 'import json,sys; print("1" if json.loads(sys.argv[1]).get("changed") else "0")' "$POOL_REFRESH_JSON")"
+if [[ "${IP_PROXY_APPLY_RUNTIME:-1}" == "1" && "$POOL_CHANGED" == "1" ]]; then
+  docker compose -f docker-compose.ipproxy.yml run --rm --no-deps xray-turn-pool run -test -config /usr/local/etc/xray/config.json
+  docker compose -f docker-compose.ipproxy.yml up -d --force-recreate xray-turn-pool
+  "$PYTHON_BIN" tools/ip_proxy_resin_configure.py
+fi
+
 echo "{\"run_id\":\"$RUN_ID\",\"status\":\"ok\"}"
