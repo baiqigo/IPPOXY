@@ -8,7 +8,7 @@ services:
     shm_size: "1gb"
     environment:
       OUTLOOK_BROWSER_PATH: /usr/bin/chromium
-      OUTLOOK_HEADLESS: "1"
+      OUTLOOK_HEADLESS: "${OUTLOOK_HEADLESS:-0}"
       OUTLOOK_PROXY: "${OUTLOOK_PROXY:-http://IPPOXY_RES.outlook-register:daytona@127.0.0.1:2260}"
       OUTLOOK_ENABLE_OAUTH2: "${OUTLOOK_ENABLE_OAUTH2:-1}"
       OUTLOOK_OAUTH_CLIENT_ID: "${OUTLOOK_OAUTH_CLIENT_ID:-9e5f94bc-e8a4-4e73-b8be-63364c29d753}"
@@ -24,7 +24,6 @@ services:
       - ./Results:/app/Results
       - ./captures:/app/captures
       - ./.profiles:/app/.profiles
-    entrypoint: []
     command: ["python", "main.py"]
 
   smoke:
@@ -39,5 +38,4 @@ services:
       - ./Results:/app/Results
       - ./captures:/app/captures
       - ./.profiles:/app/.profiles
-    entrypoint: []
     command: ["python", "-u", "smoke_browser.py"]
