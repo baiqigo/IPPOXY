@@ -7,6 +7,7 @@ import requests
 from datetime import datetime
 from urllib.request import getproxies
 from urllib.parse import quote, parse_qs
+import os
 
 def get_proxy():
     proxies = getproxies()
@@ -45,9 +46,17 @@ def _try_get_access_token(page, email):
     with open('config.json', 'r', encoding='utf-8') as f:
         data = json.load(f)
     SCOPES = data['oauth2']['Scopes']
-    client_id = data['oauth2']['client_id']
-    redirect_url = data['oauth2']['redirect_url']
+    client_id = os.environ.get("OUTLOOK_OAUTH_CLIENT_ID", "").strip() or data['oauth2']['client_id'].strip()
+    redirect_url = os.environ.get("OUTLOOK_OAUTH_REDIRECT_URL", "").strip() or data['oauth2']['redirect_url'].strip()
     _email_suffix = data['email_suffix']
+    if not client_id or not redirect_url:
+        print(
+            "[Error: OAuth2] - missing client_id/redirect_url. "
+            "Set config.json oauth2.client_id/oauth2.redirect_url or "
+            "OUTLOOK_OAUTH_CLIENT_ID/OUTLOOK_OAUTH_REDIRECT_URL.",
+            flush=True,
+        )
+        return False, False, False
     
     code_verifier = generate_code_verifier()
     code_challenge = generate_code_challenge(code_verifier)

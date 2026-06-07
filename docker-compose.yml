@@ -9,6 +9,9 @@ services:
     environment:
       OUTLOOK_BROWSER_PATH: /usr/bin/chromium
       OUTLOOK_HEADLESS: "1"
+      OUTLOOK_ENABLE_OAUTH2: "${OUTLOOK_ENABLE_OAUTH2:-1}"
+      OUTLOOK_OAUTH_CLIENT_ID: "${OUTLOOK_OAUTH_CLIENT_ID:-}"
+      OUTLOOK_OAUTH_REDIRECT_URL: "${OUTLOOK_OAUTH_REDIRECT_URL:-}"
     volumes:
       - ./Results:/app/Results
       - ./captures:/app/captures

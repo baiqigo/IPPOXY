@@ -17,7 +17,16 @@ class BaseBrowserController(ABC):
             data = json.load(f)
         self.wait_time = data['bot_protection_wait'] * 1000
         self.max_captcha_retries = data['max_captcha_retries']
-        self.enable_oauth2 = data["oauth2"]['enable_oauth2']
+        env_oauth = os.environ.get("OUTLOOK_ENABLE_OAUTH2", "").strip().lower()
+        oauth2_config = data.get("oauth2", {})
+        self.enable_oauth2 = oauth2_config.get('enable_oauth2', False) or env_oauth in ("1", "true", "yes")
+        self.oauth2_client_id = os.environ.get("OUTLOOK_OAUTH_CLIENT_ID", "").strip() or str(oauth2_config.get("client_id", "")).strip()
+        self.oauth2_redirect_url = os.environ.get("OUTLOOK_OAUTH_REDIRECT_URL", "").strip() or str(oauth2_config.get("redirect_url", "")).strip()
+        if self.enable_oauth2 and (not self.oauth2_client_id or not self.oauth2_redirect_url):
+            raise ValueError(
+                "OAuth2 token mode requires OUTLOOK_OAUTH_CLIENT_ID and "
+                "OUTLOOK_OAUTH_REDIRECT_URL, or config.json oauth2.client_id/oauth2.redirect_url."
+            )
         self.proxy = data['proxy']
         self.email_suffix = data['email_suffix']
         self.patchright_browser_path = data.get("patchright", {}).get("browser_path", "")
