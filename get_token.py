@@ -523,20 +523,23 @@ def handle_oauth2_form(page, email, password=None):
 def get_access_token(page, email, password=None, max_retries=3):
     method = os.environ.get("OUTLOOK_OAUTH_METHOD", "protocol").strip().lower()
     browser_fallback = os.environ.get("OUTLOOK_OAUTH_BROWSER_FALLBACK", "").strip().lower() in ("1", "true", "yes")
+    last_result = (False, False, False)
     if method in ("protocol", "protocol_then_browser"):
         for attempt in range(max_retries):
             result = _try_get_access_token_protocol(page, email, password=password, attempt=attempt + 1)
+            last_result = result
             if result[0] is not False:
                 return result
         if method == "protocol" and not browser_fallback:
             print("[OAuth2:Protocol] - failed and browser fallback disabled", flush=True)
-            return False, False, False
+            return last_result
 
     for attempt in range(max_retries):
         result = _try_get_access_token(page, email, password=password, attempt=attempt + 1)
+        last_result = result
         if result[0] is not False:
             return result
-    return False, False, False
+    return last_result
 
 def _safe_page_state(page):
     try:
@@ -978,7 +981,7 @@ def _try_get_access_token_protocol(page, email, password=None, attempt=1):
                 return False, False, False
             if _is_security_recovery_url(response.url):
                 print("[OAuth2:Protocol] - security recovery required; stopping protocol login", flush=True)
-                return False, False, False
+                return False, "security_recovery_required", False
 
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("Location", "")
@@ -999,6 +1002,8 @@ def _try_get_access_token_protocol(page, email, password=None, attempt=1):
             submitted, reason = _submit_protocol_form(session, response, settings["email_full"], password)
             if submitted is None:
                 print(f"[OAuth2:Protocol] - no protocol form progress reason={reason}", flush=True)
+                if reason == "security_recovery_required":
+                    return False, reason, False
                 break
             response = submitted
             if _is_redirect_navigation(response.url, settings["redirect_url"]) and _url_has_auth_code(response.url):
@@ -1008,7 +1013,7 @@ def _try_get_access_token_protocol(page, email, password=None, attempt=1):
                 return False, False, False
             if _is_security_recovery_url(response.url):
                 print("[OAuth2:Protocol] - security recovery required after form submit; stopping protocol login", flush=True)
-                return False, False, False
+                return False, "security_recovery_required", False
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("Location", "")
                 url = urljoin(response.url, location)
@@ -1020,7 +1025,7 @@ def _try_get_access_token_protocol(page, email, password=None, attempt=1):
                     return False, False, False
                 if _is_security_recovery_url(url):
                     print("[OAuth2:Protocol] - security recovery redirect required; stopping protocol login", flush=True)
-                    return False, False, False
+                    return False, "security_recovery_required", False
                 continue
             url = response.url
             pending_response = response

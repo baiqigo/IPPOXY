@@ -80,12 +80,14 @@ def retry_one(item, wait_seconds, poll_seconds, dry_run=False, write_token=True,
 
     refresh_token, access_token, expire_at = get_access_token(None, email, password=password, max_retries=1)
     if not refresh_token:
+        oauth_reason = access_token if isinstance(access_token, str) and access_token else ""
         return {
             "email": email,
             "ok": False,
             "stage": "oauth_token",
             "status": status,
             "oauth_method": os.environ.get("OUTLOOK_OAUTH_METHOD", "protocol"),
+            "oauth_reason": oauth_reason,
         }
 
     if dry_run:
