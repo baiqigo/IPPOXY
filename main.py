@@ -2,6 +2,7 @@ import os
 import time
 import json
 from get_token import get_access_token
+from mailhub_client import import_outlook_account
 from concurrent.futures import ThreadPoolExecutor
 from utils import random_email, generate_strong_password
 
@@ -34,9 +35,29 @@ def process_single_flow(controller):
         token_result = get_access_token(page, email)
         if token_result[0]:
             refresh_token, access_token, expire_at =  token_result
+            full_email = f"{email}{controller.email_suffix}"
             with open(os.path.join(os.path.dirname(__file__), 'Results', 'outlook_token.txt'), 'a', encoding='utf-8') as f2:
-                f2.write(f"{email}{controller.email_suffix}---{password}---{refresh_token}---{access_token}---{expire_at}\n") 
-            print(f'[Success: TokenAuth] - {email}{controller.email_suffix}')
+                f2.write(f"{full_email}---{password}---{refresh_token}---{access_token}---{expire_at}\n")
+
+            mailhub_result = import_outlook_account(
+                full_email,
+                password,
+                controller.oauth2_client_id,
+                refresh_token,
+            )
+            if mailhub_result.get("enabled"):
+                if mailhub_result.get("ok"):
+                    data = mailhub_result.get("data", {})
+                    print(
+                        "[Success: MailHub Import] - "
+                        f"{full_email} imported={data.get('imported')} "
+                        f"duplicated={data.get('duplicated')} skipped={data.get('skipped')}"
+                    )
+                else:
+                    print(f"[Error: MailHub Import] - {full_email} {mailhub_result}")
+                    return False
+
+            print(f'[Success: TokenAuth] - {full_email}')
             return True
         else:
             return False

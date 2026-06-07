@@ -45,7 +45,8 @@ def get_access_token(page, email, max_retries=3):
 def _try_get_access_token(page, email):
     with open('config.json', 'r', encoding='utf-8') as f:
         data = json.load(f)
-    SCOPES = data['oauth2']['Scopes']
+    env_scopes = os.environ.get("OUTLOOK_OAUTH_SCOPES", "").strip()
+    SCOPES = env_scopes.split() if env_scopes else data['oauth2']['Scopes']
     client_id = os.environ.get("OUTLOOK_OAUTH_CLIENT_ID", "").strip() or data['oauth2']['client_id'].strip()
     redirect_url = os.environ.get("OUTLOOK_OAUTH_REDIRECT_URL", "").strip() or data['oauth2']['redirect_url'].strip()
     _email_suffix = data['email_suffix']
