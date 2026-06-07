@@ -62,6 +62,39 @@ def _submit_microsoft_form(page):
     return submitted
 
 
+def _set_microsoft_login_values(page, email=None, password=None):
+    try:
+        return page.evaluate(
+            """({email, password}) => {
+                const setValue = (el, value) => {
+                    if (!el || value === null || value === undefined) return false;
+                    el.focus();
+                    el.value = value;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    return true;
+                };
+                const login = document.querySelector('input[name="loginfmt"], #i0116, input[type="email"]');
+                const pass = document.querySelector('input[name="passwd"], #i0118, input[type="password"]');
+                const loginSet = setValue(login, email);
+                const passSet = setValue(pass, password);
+                const btn = document.querySelector('#idSIButton9, input[type="submit"], button[type="submit"]');
+                if (btn) {
+                    btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                    btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                    btn.click();
+                }
+                const form = (btn && btn.form) || document.querySelector('form');
+                if (form && form.requestSubmit) form.requestSubmit();
+                else if (form) form.submit();
+                return { loginSet, passSet, button: !!btn, form: !!form };
+            }""",
+            {"email": email, "password": password},
+        )
+    except Exception as e:
+        return {"error": repr(e)}
+
+
 def _fill_first_visible(page, selectors, value, timeout=3000):
     for selector in selectors:
         try:
@@ -107,6 +140,8 @@ def handle_oauth2_form(page, email, password=None):
                 )
                 if login_selector:
                     print(f"[OAuth2] - filled login via {login_selector}", flush=True)
+                    js_result = _set_microsoft_login_values(page, email=email)
+                    print(f"[OAuth2] - js submit after login {js_result}", flush=True)
                     _submit_microsoft_form(page)
                     filled_login = True
                     page.wait_for_timeout(1500)
@@ -120,6 +155,8 @@ def handle_oauth2_form(page, email, password=None):
                 )
                 if password_selector:
                     print(f"[OAuth2] - filled password via {password_selector}", flush=True)
+                    js_result = _set_microsoft_login_values(page, email=email, password=password)
+                    print(f"[OAuth2] - js submit after password {js_result}", flush=True)
                     _submit_microsoft_form(page)
                     filled_password = True
                     page.wait_for_timeout(2000)
