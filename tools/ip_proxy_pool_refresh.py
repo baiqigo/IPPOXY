@@ -140,6 +140,25 @@ def clean_turn_candidates(path: Path) -> list[dict]:
     return out
 
 
+def resolve_candidate_input(path: Path, min_clean: int) -> tuple[Path, list[dict], str | None]:
+    candidates = clean_turn_candidates(path)
+    if len(candidates) >= min_clean:
+        return path, candidates, None
+
+    fallback_files = sorted(
+        RESIN_DIR.glob("clean_candidates_classified*.json"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    for fallback in fallback_files:
+        if fallback == path:
+            continue
+        fallback_candidates = clean_turn_candidates(fallback)
+        if len(fallback_candidates) >= min_clean:
+            return fallback, fallback_candidates, f"{path} only had {len(candidates)} clean TURN candidates"
+    return path, candidates, None
+
+
 def failed_exit_ips(verify_path: Path) -> set[str]:
     data = read_json(verify_path, {})
     if not isinstance(data, dict):
@@ -272,13 +291,14 @@ def main() -> int:
     baseline = read_json(baseline_path, [])
     if not isinstance(baseline, list):
         raise SystemExit(f"invalid baseline mapping: {baseline_path}")
-    candidates = clean_turn_candidates(args.input)
+    input_path, candidates, fallback_reason = resolve_candidate_input(args.input, args.min_clean)
     if len(candidates) < args.min_clean:
         print(
             json.dumps(
                 {
                     "status": "skipped",
                     "reason": "not_enough_clean_candidates",
+                    "input": str(args.input),
                     "clean": len(candidates),
                     "min_clean": args.min_clean,
                 },
@@ -302,7 +322,9 @@ def main() -> int:
         "status": "ok",
         "changed": bool(written["changed_files"]),
         "baseline": str(baseline_path),
-        "input": str(args.input),
+        "input": str(input_path),
+        "requested_input": str(args.input),
+        "fallback_reason": fallback_reason,
         **meta,
         **written,
     }
