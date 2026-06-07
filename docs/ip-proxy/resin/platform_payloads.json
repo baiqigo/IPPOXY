@@ -1,0 +1,54 @@
+{
+  "subscriptions": [
+    {
+      "name": "ippoxy-turn-xray-local",
+      "source_type": "local",
+      "content_file": "docs/ip-proxy/resin/turn_xray_pool.local.txt",
+      "update_interval": "5m",
+      "enabled": true,
+      "ephemeral": true,
+      "incremental_alive_nodes": true,
+      "ephemeral_node_evict_delay": "30m"
+    }
+  ],
+  "platforms": [
+    {
+      "name": "IPPOXY_RES",
+      "sticky_ttl": "24h",
+      "regex_filters": [
+        "^ippoxy-res-"
+      ],
+      "region_filters": [],
+      "allocation_policy": "PREFER_IDLE_IP",
+      "reverse_proxy_miss_action": "TREAT_AS_EMPTY",
+      "passive_circuit_breaker_disabled": false
+    },
+    {
+      "name": "IPPOXY_STATIC",
+      "sticky_ttl": "12h",
+      "regex_filters": [
+        "^ippoxy-static-"
+      ],
+      "region_filters": [],
+      "allocation_policy": "PREFER_LOW_LATENCY",
+      "reverse_proxy_miss_action": "TREAT_AS_EMPTY",
+      "passive_circuit_breaker_disabled": false
+    },
+    {
+      "name": "IPPOXY_ALL",
+      "sticky_ttl": "24h",
+      "regex_filters": [
+        "^ippoxy-"
+      ],
+      "region_filters": [],
+      "allocation_policy": "PREFER_IDLE_IP",
+      "reverse_proxy_miss_action": "TREAT_AS_EMPTY",
+      "passive_circuit_breaker_disabled": false
+    }
+  ],
+  "registrar_proxy_examples": {
+    "residential_sticky": "socks5h://IPPOXY_RES.<account>:daytona@127.0.0.1:2260",
+    "all_pool_sticky": "socks5h://IPPOXY_ALL.<account>:daytona@127.0.0.1:2260",
+    "static_fallback_sticky": "socks5h://IPPOXY_STATIC.<account>:daytona@127.0.0.1:2260"
+  }
+}

@@ -1,0 +1,1389 @@
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "tag": "in-19080",
+      "listen": "127.0.0.1",
+      "port": 19080,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19081",
+      "listen": "127.0.0.1",
+      "port": 19081,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19082",
+      "listen": "127.0.0.1",
+      "port": 19082,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19083",
+      "listen": "127.0.0.1",
+      "port": 19083,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19084",
+      "listen": "127.0.0.1",
+      "port": 19084,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19085",
+      "listen": "127.0.0.1",
+      "port": 19085,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19086",
+      "listen": "127.0.0.1",
+      "port": 19086,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19087",
+      "listen": "127.0.0.1",
+      "port": 19087,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19088",
+      "listen": "127.0.0.1",
+      "port": 19088,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19089",
+      "listen": "127.0.0.1",
+      "port": 19089,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19090",
+      "listen": "127.0.0.1",
+      "port": 19090,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19091",
+      "listen": "127.0.0.1",
+      "port": 19091,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19092",
+      "listen": "127.0.0.1",
+      "port": 19092,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19093",
+      "listen": "127.0.0.1",
+      "port": 19093,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19094",
+      "listen": "127.0.0.1",
+      "port": 19094,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19095",
+      "listen": "127.0.0.1",
+      "port": 19095,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19096",
+      "listen": "127.0.0.1",
+      "port": 19096,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19097",
+      "listen": "127.0.0.1",
+      "port": 19097,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19098",
+      "listen": "127.0.0.1",
+      "port": 19098,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19099",
+      "listen": "127.0.0.1",
+      "port": 19099,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19100",
+      "listen": "127.0.0.1",
+      "port": 19100,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19101",
+      "listen": "127.0.0.1",
+      "port": 19101,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19102",
+      "listen": "127.0.0.1",
+      "port": 19102,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19103",
+      "listen": "127.0.0.1",
+      "port": 19103,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "in-19104",
+      "listen": "127.0.0.1",
+      "port": 19104,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "out-19080",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://104.184.105.172:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19081",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://24.130.161.222:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19082",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://195.80.16.8:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19083",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://77.200.201.104:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19084",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://46.26.142.252:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19085",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://188.111.122.196:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19086",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://212.201.138.103:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19087",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://77.20.212.9:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19088",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://145.100.106.100:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19089",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://212.66.105.99:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19090",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://133.28.25.48:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19091",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://test:test123@81.93.119.16:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19092",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://test:test123@192.132.53.28:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19093",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://185.110.23.3:3479?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19094",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://190.8.18.8:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19095",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://133.28.25.44:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19096",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://83.68.35.165:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19097",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://61.74.68.16:3479?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19098",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://112.175.27.113:3479?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19099",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://test:test123@211.20.1.40:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19100",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://103.154.112.220:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19101",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://113.23.35.22:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19102",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://218.208.86.13:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19103",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://125.253.55.109:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    },
+    {
+      "tag": "out-19104",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "ip-proxy-turn-poc.khowk1isgv.workers.dev",
+            "port": 443,
+            "users": [
+              {
+                "id": "2523c510-9ff0-415b-9582-93949bfae7e3",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+        },
+        "wsSettings": {
+          "path": "/turn://177.125.244.38:3478?ed=2560",
+          "headers": {
+            "Host": "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+          }
+        }
+      }
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19080"
+        ],
+        "outboundTag": "out-19080"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19081"
+        ],
+        "outboundTag": "out-19081"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19082"
+        ],
+        "outboundTag": "out-19082"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19083"
+        ],
+        "outboundTag": "out-19083"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19084"
+        ],
+        "outboundTag": "out-19084"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19085"
+        ],
+        "outboundTag": "out-19085"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19086"
+        ],
+        "outboundTag": "out-19086"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19087"
+        ],
+        "outboundTag": "out-19087"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19088"
+        ],
+        "outboundTag": "out-19088"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19089"
+        ],
+        "outboundTag": "out-19089"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19090"
+        ],
+        "outboundTag": "out-19090"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19091"
+        ],
+        "outboundTag": "out-19091"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19092"
+        ],
+        "outboundTag": "out-19092"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19093"
+        ],
+        "outboundTag": "out-19093"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19094"
+        ],
+        "outboundTag": "out-19094"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19095"
+        ],
+        "outboundTag": "out-19095"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19096"
+        ],
+        "outboundTag": "out-19096"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19097"
+        ],
+        "outboundTag": "out-19097"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19098"
+        ],
+        "outboundTag": "out-19098"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19099"
+        ],
+        "outboundTag": "out-19099"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19100"
+        ],
+        "outboundTag": "out-19100"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19101"
+        ],
+        "outboundTag": "out-19101"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19102"
+        ],
+        "outboundTag": "out-19102"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19103"
+        ],
+        "outboundTag": "out-19103"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-19104"
+        ],
+        "outboundTag": "out-19104"
+      }
+    ]
+  }
+}

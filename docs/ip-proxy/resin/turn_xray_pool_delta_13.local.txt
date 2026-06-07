@@ -1,0 +1,13 @@
+socks5://127.0.0.1:19092#ippoxy-static-pt-instituto-superior-tecnico-areeiro-192-132-53-28
+socks5://127.0.0.1:19093#ippoxy-static-it-nbit-it-servizi-hosting-altamura-185-110-23-3
+socks5://127.0.0.1:19094#ippoxy-res-br-lv-consultoria-eireli-goi-nia-190-8-18-8
+socks5://127.0.0.1:19095#ippoxy-static-jp-kanazawa-university-nonoichi-133-28-25-44
+socks5://127.0.0.1:19096#ippoxy-res-ru-seaexpress-ltd-avtovo-83-68-35-165
+socks5://127.0.0.1:19097#ippoxy-res-kr-korea-telecom-seongnam-si-61-74-68-17
+socks5://127.0.0.1:19098#ippoxy-res-kr-korea-telecom-seongnam-si-61-74-68-4
+socks5://127.0.0.1:19099#ippoxy-res-tw-chunghwa-telecom-co-ltd-taipei-211-20-1-40
+socks5://127.0.0.1:19100#ippoxy-res-id-pt-mora-telematika-indonesia-jakarta-103-154-112-220
+socks5://127.0.0.1:19101#ippoxy-res-vn-fpt-telecom-company-ho-chi-minh-city-113-23-35-22
+socks5://127.0.0.1:19102#ippoxy-res-my-tm-technology-services-sdn-b-george-town-218-208-86-13
+socks5://127.0.0.1:19103#ippoxy-res-au-superloop-australia-pty-ltd-sydney-125-253-55-109
+socks5://127.0.0.1:19104#ippoxy-res-br-nedel-telecom-ira-177-125-244-38

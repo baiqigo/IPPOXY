@@ -1,0 +1,22 @@
+services:
+  resin:
+    image: ghcr.io/resinat/resin:latest
+    container_name: ippoxy-resin
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      RESIN_AUTH_VERSION: V1
+      RESIN_ADMIN_TOKEN: ${RESIN_ADMIN_TOKEN:-daytona-admin}
+      RESIN_PROXY_TOKEN: ${RESIN_PROXY_TOKEN:-daytona}
+      RESIN_LISTEN_ADDRESS: 127.0.0.1
+      RESIN_PORT: 2260
+    volumes:
+      - ./.runtime/resin/cache:/var/cache/resin
+      - ./.runtime/resin/state:/var/lib/resin
+      - ./.runtime/resin/log:/var/log/resin
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2260/healthz >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

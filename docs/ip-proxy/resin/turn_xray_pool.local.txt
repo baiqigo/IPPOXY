@@ -1,0 +1,12 @@
+socks5://127.0.0.1:19080#ippoxy-res-us-att-lubbock
+socks5://127.0.0.1:19081#ippoxy-res-us-comcast-lafayette
+socks5://127.0.0.1:19083#ippoxy-res-fr-sfr-rhone
+socks5://127.0.0.1:19084#ippoxy-res-es-vodafone-sabadell
+socks5://127.0.0.1:19085#ippoxy-res-de-vodafone-heilbronn
+socks5://127.0.0.1:19087#ippoxy-res-de-vodafone-hamburg
+socks5://127.0.0.1:19089#ippoxy-res-it-panservice-rome
+socks5://127.0.0.1:19082#ippoxy-static-gb-bnw-london
+socks5://127.0.0.1:19086#ippoxy-static-de-bielefeld-dfn
+socks5://127.0.0.1:19088#ippoxy-static-nl-surf-amsterdam
+socks5://127.0.0.1:19090#ippoxy-static-jp-kanazawa
+socks5://127.0.0.1:19091#ippoxy-static-de-prosieben
