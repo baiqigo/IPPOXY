@@ -931,6 +931,9 @@ def _submit_protocol_form(session, response, email, password):
 
     action = form.get("action") or response.url
     url = urljoin(response.url, action)
+    if _is_security_recovery_url(url):
+        print("[OAuth2:Protocol] - security recovery form detected; stopping protocol login", flush=True)
+        return None, "security_recovery_required"
     method = (form.get("method") or "get").lower()
     headers = {"Referer": response.url, "Origin": f"{urlparse(response.url).scheme}://{urlparse(response.url).netloc}"}
     print(
