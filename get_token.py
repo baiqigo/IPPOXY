@@ -699,13 +699,20 @@ def _submit_msa_config_login(session, response, email, password):
         f"ppft_len={len(ppft)}",
         flush=True,
     )
-    return session.post(
+    login_response = session.post(
         url_post,
         data=data,
         headers={"Referer": response.url, "Origin": "https://login.live.com"},
         allow_redirects=False,
         timeout=30,
-    ), "posted_msa_config"
+    )
+    print(
+        f"[OAuth2:Protocol] - MSA config login status={login_response.status_code} "
+        f"url={urlparse(login_response.url).netloc}{urlparse(login_response.url).path} "
+        f"location={login_response.headers.get('Location', '')[:160]}",
+        flush=True,
+    )
+    return login_response, "posted_msa_config"
 
 
 def _submit_protocol_form(session, response, email, password):
@@ -795,7 +802,7 @@ def _try_get_access_token_protocol(page, email, password=None, attempt=1):
                 break
 
             submitted, reason = _submit_protocol_form(session, response, settings["email_full"], password)
-            if not submitted:
+            if submitted is None:
                 print(f"[OAuth2:Protocol] - no protocol form progress reason={reason}", flush=True)
                 break
             response = submitted
