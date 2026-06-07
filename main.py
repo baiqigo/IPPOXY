@@ -32,7 +32,7 @@ def process_single_flow(controller):
         elif not result:
             return False
 
-        token_result = get_access_token(page, email)
+        token_result = get_access_token(page, email, password=password)
         if token_result[0]:
             refresh_token, access_token, expire_at =  token_result
             full_email = f"{email}{controller.email_suffix}"

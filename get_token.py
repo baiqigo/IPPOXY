@@ -24,25 +24,60 @@ def generate_code_challenge(code_verifier):
     sha256_hash = hashlib.sha256(code_verifier.encode()).digest()
     return base64.urlsafe_b64encode(sha256_hash).decode().rstrip('=')
 
-def handle_oauth2_form(page, email):
+def _click_if_visible(locator, timeout=3000):
     try:
-        page.locator('[name="loginfmt"]').fill(email, timeout=20000)
-        page.locator('#idSIButton9').click(timeout=7000)
+        if locator.count() > 0:
+            locator.first.click(timeout=timeout)
+            return True
+    except Exception:
+        pass
+    return False
 
-        consent_btn = page.locator('[data-testid="appConsentPrimaryButton"]')
-        consent_btn.wait_for(state='visible', timeout=20000)
-        consent_btn.click(timeout=10000)
-    except:
+
+def handle_oauth2_form(page, email, password=None):
+    try:
+        login = page.locator('[name="loginfmt"]')
+        if login.count() > 0:
+            login.first.fill(email, timeout=20000)
+            _click_if_visible(page.locator('#idSIButton9'), timeout=7000)
+            page.wait_for_timeout(500)
+    except Exception:
         pass
 
-def get_access_token(page, email, max_retries=3):
+    if password:
+        try:
+            password_box = page.locator('[name="passwd"], input[type="password"]')
+            if password_box.count() > 0:
+                password_box.first.fill(password, timeout=20000)
+                _click_if_visible(page.locator('#idSIButton9'), timeout=7000)
+                page.wait_for_timeout(1000)
+        except Exception:
+            pass
+
+    _click_if_visible(page.locator('#idSIButton9'), timeout=5000)
+    _click_if_visible(page.locator('[data-testid="appConsentPrimaryButton"]'), timeout=10000)
+
+
+def get_access_token(page, email, password=None, max_retries=3):
     for attempt in range(max_retries):
-        result = _try_get_access_token(page, email)
+        result = _try_get_access_token(page, email, password=password, attempt=attempt + 1)
         if result[0] is not False:
             return result
     return False, False, False
 
-def _try_get_access_token(page, email):
+def _safe_page_state(page):
+    try:
+        url = page.url
+    except Exception:
+        url = "<url unavailable>"
+    try:
+        title = page.title()
+    except Exception:
+        title = "<title unavailable>"
+    return url, title
+
+
+def _try_get_access_token(page, email, password=None, attempt=1):
     with open('config.json', 'r', encoding='utf-8') as f:
         data = json.load(f)
     env_scopes = os.environ.get("OUTLOOK_OAUTH_SCOPES", "").strip()
@@ -73,6 +108,7 @@ def _try_get_access_token(page, email):
     }
 
     authorize_url = f"https://login.microsoftonline.com/common/oauth2/v2.0/authorize?{'&'.join(f'{k}={quote(v)}' for k, v in params.items())}"
+    print(f"[OAuth2] - authorize attempt {attempt}", flush=True)
 
     captured_url = None
 
@@ -86,11 +122,12 @@ def _try_get_access_token(page, email):
     try:
         try:
             page.wait_for_timeout(250)
-            page.goto(authorize_url, timeout=30000)
-        except:
+            page.goto(authorize_url, timeout=30000, wait_until="domcontentloaded")
+        except Exception as e:
+            print(f"[Error: OAuth2] - authorize navigation failed: {e}", flush=True)
             return False, False, False
 
-        handle_oauth2_form(page, f"{email}{_email_suffix}")
+        handle_oauth2_form(page, f"{email}{_email_suffix}", password=password)
 
         max_refreshes = 1
         refresh_count = 0
@@ -103,6 +140,8 @@ def _try_get_access_token(page, email):
 
             if i > 0 and i % refresh_interval == 0:
                 if refresh_count >= max_refreshes:
+                    url, title = _safe_page_state(page)
+                    print(f"[Error: OAuth2] - code not captured before refresh limit url={url} title={title}", flush=True)
                     return False, False, False
                 refresh_count += 1
                 try:
@@ -110,12 +149,16 @@ def _try_get_access_token(page, email):
                 except:
                     pass
         else:
+            url, title = _safe_page_state(page)
+            print(f"[Error: OAuth2] - authorization code not captured url={url} title={title}", flush=True)
             return False, False, False
 
     finally:
         page.remove_listener("request", on_request)
 
     if not captured_url or 'code=' not in captured_url:
+        url, title = _safe_page_state(page)
+        print(f"[Error: OAuth2] - missing captured code url={url} title={title}", flush=True)
         return False, False, False
 
     auth_code = parse_qs(captured_url.split('?')[1])['code'][0]
@@ -132,17 +175,24 @@ def _try_get_access_token(page, email):
                 'scope': ' '.join(SCOPES)
             },
             headers={'Content-Type': 'application/x-www-form-urlencoded'},
-            proxies=get_proxy()
+            proxies=get_proxy(),
+            timeout=30,
         )
 
-        if 'refresh_token' in response.json():
-            tokens = response.json()
+        tokens = response.json()
+        if 'refresh_token' in tokens:
             return (
                 tokens['refresh_token'],
                 tokens.get('access_token', ''),
                 datetime.now().timestamp() + tokens['expires_in']
             )
-    except:
+        print(
+            f"[Error: OAuth2] - token response missing refresh_token "
+            f"status={response.status_code} body={str(tokens)[:300]}",
+            flush=True,
+        )
+    except Exception as e:
+        print(f"[Error: OAuth2] - token exchange failed: {e}", flush=True)
         return False, False, False
 
     return False, False, False
