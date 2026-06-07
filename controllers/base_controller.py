@@ -21,6 +21,7 @@ class BaseBrowserController(ABC):
         self.proxy = data['proxy']
         self.email_suffix = data['email_suffix']
         self.patchright_browser_path = data.get("patchright", {}).get("browser_path", "")
+        self.challenge_router_config = data.get("challenge_router", {})
 
         self.thread_local = threading.local()
         self.cleanup_lock = threading.Lock()

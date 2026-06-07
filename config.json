@@ -4,6 +4,16 @@
     "proxy": "socks5://127.0.0.1:1080",
     "bot_protection_wait": 11,
     "max_captcha_retries": 2,
+    "challenge_router": {
+        "enabled": true,
+        "order": [
+            "microsoft_press",
+            "visual_agent",
+            "human_queue",
+            "paid_captcha"
+        ],
+        "human_timeout_seconds": 0
+    },
     "concurrent_flows": 1,
     "max_tasks": 1,
     "oauth2": {

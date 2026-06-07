@@ -4,6 +4,7 @@ import threading
 from urllib.parse import urlparse, urlunparse, unquote
 from patchright.sync_api import sync_playwright
 from .base_controller import BaseBrowserController
+from challenge_providers import ChallengeRouter
 
 
 class PatchrightController(BaseBrowserController):
@@ -68,13 +69,15 @@ class PatchrightController(BaseBrowserController):
         print(f"[Captcha] - using iframe index={idx} score={score} meta={meta}", flush=True)
         return frame, meta
 
-    def _press_point(self, page, x, y, label):
+    def _press_point(self, page, x, y, label, hold_ms=None):
         page.mouse.move(x + random.randint(-3, 3), y + random.randint(-3, 3), steps=random.randint(8, 15))
         page.wait_for_timeout(random.randint(120, 350))
         page.mouse.down()
-        page.wait_for_timeout(random.randint(650, 1400))
+        if hold_ms is None:
+            hold_ms = random.randint(650, 1400)
+        page.wait_for_timeout(hold_ms)
         page.mouse.up()
-        print(f"[Captcha] - pressed {label} at x={x:.1f}, y={y:.1f}", flush=True)
+        print(f"[Captcha] - pressed {label} at x={x:.1f}, y={y:.1f}, hold_ms={hold_ms}", flush=True)
 
     def _visual_challenge_press(self, page, frame_meta, label):
         box = (frame_meta or {}).get("box") or {}
@@ -87,7 +90,8 @@ class PatchrightController(BaseBrowserController):
             x = x0 + min(max(width * 0.18, 45), width - 20)
         else:
             x = x0 + min(max(width * 0.57, 160), width - 30)
-        self._press_point(page, x, y, f"visual_{label}")
+        hold_ms = random.randint(4200, 6200) if label == "press_again" else random.randint(900, 1600)
+        self._press_point(page, x, y, f"visual_{label}", hold_ms=hold_ms)
 
     def _click_locator_or_box(self, page, locator, label, frame_meta=None):
         try:
@@ -182,66 +186,8 @@ class PatchrightController(BaseBrowserController):
             return False, False
         
     def handle_captcha(self, page):
-
-        challenge_frame, frame_meta = self._find_challenge_frame(page)
-
-
-        for attempt in range(0, self.max_captcha_retries + 1):
-
-            page.wait_for_timeout(200)
-            print(f"[Captcha] - attempt {attempt + 1}/{self.max_captcha_retries + 1}: locating accessibility challenge", flush=True)
-            loc = challenge_frame.locator('[aria-label="可访问性挑战"]')
-            try:
-                print(f"[Captcha] - accessibility count={loc.count()}", flush=True)
-            except Exception as e:
-                print(f"[Captcha] - accessibility count error={e}", flush=True)
-            self._click_locator_or_box(page, loc, "accessibility_challenge", frame_meta)
-            page.wait_for_timeout(random.randint(400, 900))
-
-            loc2 = challenge_frame.locator('[aria-label="再次按下"]')
-            try:
-                print(f"[Captcha] - press_again count={loc2.count()}", flush=True)
-            except Exception as e:
-                print(f"[Captcha] - press_again count error={e}", flush=True)
-            self._click_locator_or_box(page, loc2, "press_again", frame_meta)
-
-            try:
-
-                challenge_frame.locator('.draw').wait_for(state="detached", timeout=12000)
-                try:
-
-                    # 简单的认为加载8秒后成功，暂不考虑请求.
-                    page.locator('[role="status"][aria-label="正在加载..."]').wait_for(timeout=5000)
-                    page.wait_for_timeout(8000)
-                    if page.get_by_text('一些异常活动').count() or page.get_by_text('此站点正在维护，暂时无法使用，请稍后重试。').count() > 0:
-                        print("[Error: Rate limit] - 正常通过验证码，但当前IP注册频率过快。")
-                        return False
-                    elif challenge_frame.locator('[aria-label="可访问性挑战"]').count() > 0:
-                        self.capture_debug_state(page, f"captcha_attempt_{attempt + 1}_challenge_still_visible")
-                        continue
-                    break
-
-                except:
-
-                    if page.get_by_text('取消').count() > 0:
-                        break
-                    self.capture_debug_state(page, f"captcha_attempt_{attempt + 1}_retry_text_wait")
-                    try:
-                        challenge_frame.get_by_text("请再试一次").wait_for(timeout=5000)
-                    except Exception:
-                        pass
-                    continue
-
-            except:
-                if page.get_by_text('取消').count() > 0:
-                     break
-                self.capture_debug_state(page, f"captcha_attempt_{attempt + 1}_outer_failure")
-                return False
-        else: 
-            self.capture_debug_state(page, "captcha_attempts_exhausted")
-            return False
-
-        return True
+        router = ChallengeRouter.from_config(self.challenge_router_config)
+        return router.solve(page, self)
 
     def get_thread_page(self):
         context = self.get_thread_browser()
