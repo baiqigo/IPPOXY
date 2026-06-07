@@ -10,7 +10,7 @@ services:
       - ./.runtime/ip-proxy/logs:/var/log/xray
 
   resin:
-    image: ghcr.io/resinat/resin:latest
+    image: ghcr.io/resinat/resin:1.1.1
     container_name: ippoxy-resin
     restart: unless-stopped
     network_mode: host
