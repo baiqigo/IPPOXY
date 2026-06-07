@@ -16,6 +16,7 @@ services:
       OUTLOOK_OAUTH_TENANT: "${OUTLOOK_OAUTH_TENANT:-consumers}"
       OUTLOOK_OAUTH_SCOPES: "${OUTLOOK_OAUTH_SCOPES:-https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/POP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access}"
       OUTLOOK_OAUTH_PROMPT: "${OUTLOOK_OAUTH_PROMPT:-consent}"
+      OUTLOOK_OAUTH_METHOD: "${OUTLOOK_OAUTH_METHOD:-protocol_then_browser}"
       MAIL_HUB_URL: "${MAIL_HUB_URL:-http://127.0.0.1:3100}"
       MAIL_HUB_API_SECRET: "${MAIL_HUB_API_SECRET:-}"
       MAILPILOT_TOKEN: "${MAILPILOT_TOKEN:-}"
@@ -67,3 +68,19 @@ services:
       - ./captures:/app/captures
     entrypoint: []
     command: ["python", "-u", "oauth_pending_retry.py"]
+
+  mailhub-import-tokens:
+    image: outlook-register-lainsnl:staging
+    network_mode: host
+    environment:
+      MAIL_HUB_URL: "${MAIL_HUB_URL:-http://127.0.0.1:3100}"
+      MAIL_HUB_API_SECRET: "${MAIL_HUB_API_SECRET:-}"
+      MAILPILOT_TOKEN: "${MAILPILOT_TOKEN:-}"
+      MAILPILOT_API_KEY: "${MAILPILOT_API_KEY:-}"
+      MAILPILOT_API_SECRET: "${MAILPILOT_API_SECRET:-}"
+      MAIL_HUB_OUTLOOK_TYPE: "${MAIL_HUB_OUTLOOK_TYPE:-long}"
+      MAIL_HUB_OUTLOOK_GROUP: "${MAIL_HUB_OUTLOOK_GROUP:-IPPOXY}"
+    volumes:
+      - ./Results:/app/Results
+    entrypoint: []
+    command: ["python", "-u", "mailhub_import_tokens.py"]
