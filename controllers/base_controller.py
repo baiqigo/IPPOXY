@@ -348,5 +348,5 @@ class BaseBrowserController(ABC):
             page.locator('[aria-label="新邮件"]').wait_for(timeout=32000)
             return True
         except:
-            print('[Error: Timeout] - 邮箱未初始化，无法正常收件。')
-            return False
+            print('[Warn: MailboxInit] - 邮箱界面未在等待时间内初始化，继续执行 OAuth token 补全。')
+            return True
