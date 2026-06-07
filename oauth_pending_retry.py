@@ -66,7 +66,7 @@ def append_line(path, line):
         f.write(line.rstrip("\n") + "\n")
 
 
-def retry_one(item, wait_seconds, poll_seconds):
+def retry_one(item, wait_seconds, poll_seconds, dry_run=False, write_token=True, import_mailhub=True):
     email = item["email"]
     password = item["password"]
     ready, status = wait_msa_login_ready(
@@ -88,16 +88,30 @@ def retry_one(item, wait_seconds, poll_seconds):
             "oauth_method": os.environ.get("OUTLOOK_OAUTH_METHOD", "protocol"),
         }
 
+    if dry_run:
+        return {
+            "email": email,
+            "ok": True,
+            "stage": "token_acquired_dry_run",
+            "refresh_token_len": len(refresh_token),
+            "access_token_len": len(access_token or ""),
+            "expire_at": expire_at,
+        }
+
     with open(ROOT / "config.json", "r", encoding="utf-8") as f:
         config = json.load(f)
     client_id = os.environ.get("OUTLOOK_OAUTH_CLIENT_ID", "").strip() or config["oauth2"]["client_id"].strip()
 
-    append_line(
-        RESULTS / "outlook_token.txt",
-        f"{email}---{password}---{refresh_token}---{access_token}---{expire_at}",
-    )
-    mailhub_result = import_outlook_account(email, password, client_id, refresh_token)
-    if mailhub_result.get("enabled") and not mailhub_result.get("ok"):
+    if write_token:
+        append_line(
+            RESULTS / "outlook_token.txt",
+            f"{email}---{password}---{refresh_token}---{access_token}---{expire_at}",
+        )
+
+    mailhub_result = {"enabled": False, "skipped": True}
+    if import_mailhub:
+        mailhub_result = import_outlook_account(email, password, client_id, refresh_token)
+    if import_mailhub and mailhub_result.get("enabled") and not mailhub_result.get("ok"):
         return {
             "email": email,
             "ok": False,
@@ -114,6 +128,9 @@ def main():
     parser.add_argument("--email", default="", help="Retry only one full email address.")
     parser.add_argument("--password", default="", help="Use with --email to retry an account that is not in Results files.")
     parser.add_argument("--skip-imported", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--dry-run", action="store_true", help="Acquire a token but do not write Results files or import MailHub.")
+    parser.add_argument("--write-token", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--import-mailhub", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--wait-seconds", type=int, default=int(os.environ.get("OUTLOOK_PENDING_READY_WAIT_SECONDS", "120")))
     parser.add_argument("--poll-seconds", type=int, default=int(os.environ.get("OUTLOOK_PENDING_READY_POLL_SECONDS", "10")))
@@ -136,7 +153,14 @@ def main():
     )
     success = 0
     for item in candidates:
-        result = retry_one(item, args.wait_seconds, args.poll_seconds)
+        result = retry_one(
+            item,
+            args.wait_seconds,
+            args.poll_seconds,
+            dry_run=args.dry_run,
+            write_token=args.write_token and not args.dry_run,
+            import_mailhub=args.import_mailhub and not args.dry_run,
+        )
         print(f"[PendingRetry] - result={result}", flush=True)
         if result.get("ok"):
             success += 1
