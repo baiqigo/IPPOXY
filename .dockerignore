@@ -1,0 +1,12 @@
+.git
+.venv
+.venv313
+__pycache__/
+*/__pycache__/
+.profiles/
+Results/
+captures/
+*.pyc
+*.pyo
+*.log
+*.tmp

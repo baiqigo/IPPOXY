@@ -1,0 +1,27 @@
+services:
+  outlook-register:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: outlook-register-lainsnl:staging
+    network_mode: host
+    shm_size: "1gb"
+    environment:
+      OUTLOOK_BROWSER_PATH: /usr/bin/chromium
+    volumes:
+      - ./Results:/app/Results
+      - ./captures:/app/captures
+      - ./.profiles:/app/.profiles
+    command: ["python", "main.py"]
+
+  smoke:
+    image: outlook-register-lainsnl:staging
+    network_mode: host
+    shm_size: "1gb"
+    environment:
+      OUTLOOK_BROWSER_PATH: /usr/bin/chromium
+    volumes:
+      - ./Results:/app/Results
+      - ./captures:/app/captures
+      - ./.profiles:/app/.profiles
+    command: ["python", "smoke_browser.py"]

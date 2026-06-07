@@ -1,11 +1,23 @@
 import os
 import random
+import threading
 from urllib.parse import urlparse, urlunparse, unquote
 from patchright.sync_api import sync_playwright
 from .base_controller import BaseBrowserController
 
 
 class PatchrightController(BaseBrowserController):
+    def _browser_path(self):
+        env_path = os.environ.get("OUTLOOK_BROWSER_PATH", "").strip()
+        if env_path:
+            return env_path
+        config_path = (getattr(self, "patchright_browser_path", "") or "").strip()
+        if config_path:
+            return config_path
+        linux_system_chromium = "/usr/bin/chromium"
+        if os.name == "posix" and os.path.exists(linux_system_chromium):
+            return linux_system_chromium
+        return ""
 
     def launch_browser(self):
         try:
@@ -30,13 +42,25 @@ class PatchrightController(BaseBrowserController):
                         "bypass": "localhost",
                     }
 
-            profile_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.profiles', 'patchright_default'))
+            profile_dir = os.path.abspath(os.path.join(
+                os.path.dirname(__file__),
+                '..',
+                '.profiles',
+                f'patchright_{threading.get_ident()}',
+            ))
             os.makedirs(profile_dir, exist_ok=True)
+            launch_kwargs = {}
+            browser_path = self._browser_path()
+            if browser_path:
+                launch_kwargs["executable_path"] = browser_path
+
             b = p.chromium.launch_persistent_context(
                 user_data_dir=profile_dir,
                 headless=False,
                 args=[
                     '--lang=zh-CN',
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',
                     '--disable-blink-features=AutomationControlled',
                     '--disable-features=WebRtcHideLocalIpsWithMdns',
                     '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
@@ -45,7 +69,8 @@ class PatchrightController(BaseBrowserController):
                 timezone_id='America/New_York',
                 viewport={"width": 1365, "height": 768},
                 screen={"width": 1365, "height": 768},
-                proxy=proxy_settings
+                proxy=proxy_settings,
+                **launch_kwargs,
             )
 
             return p, b

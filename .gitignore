@@ -1,0 +1,9 @@
+.profiles/
+Results/
+captures/
+__pycache__/
+*/__pycache__/
+*.pyc
+*.pyo
+*.log
+*.tmp

@@ -4,8 +4,6 @@ import json
 from get_token import get_access_token
 from concurrent.futures import ThreadPoolExecutor
 from utils import random_email, generate_strong_password
-from controllers.patchright_controller import PatchrightController
-from controllers.playwright_controller import PlaywrightController
 
 
 
@@ -96,8 +94,10 @@ if __name__ == "__main__":
     concurrent_flows = data["concurrent_flows"]
 
     if data["choose_browser"] =="patchright":
+        from controllers.patchright_controller import PatchrightController
         selected_controller = PatchrightController()
     elif data["choose_browser"] =="playwright":
+        from controllers.playwright_controller import PlaywrightController
         selected_controller = PlaywrightController()
     else:
         print("不支持的浏览器类型，填写patchright或者playwright")

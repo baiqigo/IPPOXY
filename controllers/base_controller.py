@@ -19,6 +19,7 @@ class BaseBrowserController(ABC):
         self.enable_oauth2 = data["oauth2"]['enable_oauth2']
         self.proxy = data['proxy']
         self.email_suffix = data['email_suffix']
+        self.patchright_browser_path = data.get("patchright", {}).get("browser_path", "")
 
         self.thread_local = threading.local()
         self.cleanup_lock = threading.Lock()
