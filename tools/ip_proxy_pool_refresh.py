@@ -17,8 +17,9 @@ ROOT = Path(os.environ.get("IPPOXY_ROOT", Path(__file__).resolve().parents[1]))
 RUNTIME = Path(os.environ.get("IP_PROXY_RUNTIME_DIR", ROOT / ".runtime/ip-proxy"))
 RESIN_DIR = ROOT / "docs/ip-proxy/resin"
 DOC_RUNTIME_DIR = ROOT / "docs/ip-proxy/research/runtime"
+RUNTIME_RESIN_DIR = RUNTIME / "resin"
 
-DEFAULT_INPUT = RESIN_DIR / "clean_candidates_classified.latest.json"
+DEFAULT_INPUT = RUNTIME_RESIN_DIR / "clean_candidates_classified.latest.json"
 DEFAULT_BASELINE = DOC_RUNTIME_DIR / "turn_xray_pool_20260608.json"
 DEFAULT_VERIFY = ROOT / "captures/ip_runtime_verify_latest.json"
 DEFAULT_WORKER_HOST = "ip-proxy-turn-poc.khowk1isgv.workers.dev"
@@ -146,7 +147,7 @@ def resolve_candidate_input(path: Path, min_clean: int) -> tuple[Path, list[dict
         return path, candidates, None
 
     fallback_files = sorted(
-        RESIN_DIR.glob("clean_candidates_classified*.json"),
+        [*RUNTIME_RESIN_DIR.glob("clean_candidates_classified*.json"), *RESIN_DIR.glob("clean_candidates_classified*.json")],
         key=lambda item: item.stat().st_mtime,
         reverse=True,
     )

@@ -13,6 +13,7 @@ WITH_GROK="${WITH_GROK:-0}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 mkdir -p docs/ip-proxy/research/runtime docs/ip-proxy/resin
+mkdir -p .runtime/ip-proxy/research .runtime/ip-proxy/resin
 
 if [[ "$WITH_GROK" == "1" ]]; then
   if [[ -n "${GROK_API_KEY:-${BAIQI_API_KEY:-}}" ]]; then
@@ -31,10 +32,10 @@ fi
 
 "$PYTHON_BIN" tools/ip_proxy_classify_clean.py \
   --run-id "$RUN_ID" \
-  --input "docs/ip-proxy/research/runtime/proxy_candidate_check_${RUN_ID}.json"
+  --input ".runtime/ip-proxy/research/proxy_candidate_check_${RUN_ID}.json"
 
 POOL_REFRESH_JSON="$("$PYTHON_BIN" tools/ip_proxy_pool_refresh.py \
-  --input "docs/ip-proxy/resin/clean_candidates_classified.latest.json")"
+  --input ".runtime/ip-proxy/resin/clean_candidates_classified.latest.json")"
 echo "$POOL_REFRESH_JSON"
 
 POOL_CHANGED="$("$PYTHON_BIN" -c 'import json,sys; print("1" if json.loads(sys.argv[1]).get("changed") else "0")' "$POOL_REFRESH_JSON")"

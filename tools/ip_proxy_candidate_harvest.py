@@ -13,6 +13,7 @@ import concurrent.futures
 import csv
 import io
 import json
+import os
 import re
 import time
 import urllib.error
@@ -22,8 +23,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_DIR = ROOT / "docs" / "ip-proxy" / "research" / "runtime"
-RESIN_DIR = ROOT / "docs" / "ip-proxy" / "resin"
+IP_RUNTIME_DIR = Path(os.environ.get("IP_PROXY_RUNTIME_DIR", ROOT / ".runtime/ip-proxy"))
+RUNTIME_DIR = IP_RUNTIME_DIR / "research"
+RESIN_DIR = IP_RUNTIME_DIR / "resin"
 SOURCES = {
     "cmliussss_vpngate": "https://sub.cmliussss.net/vpngate",
     "delta_vpn_gate": "https://raw.githubusercontent.com/Delta-Kronecker/Vpn-Gate/refs/heads/main/sstp_hosts.txt",

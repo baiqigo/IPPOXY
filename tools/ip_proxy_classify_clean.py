@@ -5,14 +5,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from collections import Counter
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECK_JSON = ROOT / "docs/ip-proxy/research/runtime/proxy_candidate_check.latest.json"
-RESIN_DIR = ROOT / "docs/ip-proxy/resin"
+IP_RUNTIME_DIR = Path(os.environ.get("IP_PROXY_RUNTIME_DIR", ROOT / ".runtime/ip-proxy"))
+CHECK_JSON = IP_RUNTIME_DIR / "research/proxy_candidate_check.latest.json"
+RESIN_DIR = IP_RUNTIME_DIR / "resin"
 
 
 def bucket(item: dict) -> str:
