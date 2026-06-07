@@ -96,6 +96,8 @@ class BaseBrowserController(ABC):
             "url": "",
             "title": "",
             "frames": [],
+            "iframe_elements": [],
+            "iframe_button_snapshots": [],
             "visible_buttons": [],
             "visible_inputs": [],
             "texts": {},
@@ -121,10 +123,53 @@ class BaseBrowserController(ABC):
                 data["frames"].append({
                     "name": frame.name,
                     "url": frame.url,
-                    "title": frame.title(timeout=1000),
                 })
         except Exception as e:
             data["frames_error"] = repr(e)
+
+        try:
+            iframe_handles = page.query_selector_all("iframe")
+            for idx, iframe in enumerate(iframe_handles[:20]):
+                meta = iframe.evaluate(
+                    """e => ({
+                        index: 0,
+                        id: e.id,
+                        name: e.getAttribute('name'),
+                        title: e.getAttribute('title'),
+                        src: e.getAttribute('src'),
+                        style: e.getAttribute('style'),
+                        aria: e.getAttribute('aria-label'),
+                        box: (() => {
+                            const r = e.getBoundingClientRect();
+                            return {x: r.x, y: r.y, width: r.width, height: r.height};
+                        })()
+                    })"""
+                )
+                meta["index"] = idx
+                data["iframe_elements"].append(meta)
+                frame = iframe.content_frame()
+                if frame:
+                    try:
+                        buttons = frame.locator("button, [role=button], [aria-label]").evaluate_all(
+                            """els => els.slice(0, 80).map(e => ({
+                                tag: e.tagName,
+                                text: (e.innerText || e.textContent || '').slice(0, 120),
+                                aria: e.getAttribute('aria-label'),
+                                role: e.getAttribute('role'),
+                                id: e.id,
+                                cls: e.className,
+                                visible: !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length)
+                            }))"""
+                        )
+                    except Exception as e:
+                        buttons = {"error": repr(e)}
+                    data["iframe_button_snapshots"].append({
+                        "index": idx,
+                        "frame_url": frame.url,
+                        "buttons": buttons,
+                    })
+        except Exception as e:
+            data["iframe_elements_error"] = repr(e)
 
         try:
             data["visible_buttons"] = page.locator(

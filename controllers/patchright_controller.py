@@ -7,6 +7,82 @@ from .base_controller import BaseBrowserController
 
 
 class PatchrightController(BaseBrowserController):
+    def _find_challenge_frame(self, page):
+        page.wait_for_selector('iframe[title="验证质询"]', timeout=12000)
+        candidates = []
+        for idx, frame in enumerate(page.frames):
+            score = 0
+            meta = {"source": "page.frames", "index": idx, "name": frame.name, "url": frame.url}
+            try:
+                if frame.locator('[aria-label="可访问性挑战"]').count() > 0:
+                    score += 10
+                if frame.locator('[aria-label="再次按下"]').count() > 0:
+                    score += 10
+                if frame.locator("button, [role=button], [aria-label]").count() > 0:
+                    score += 2
+            except Exception:
+                pass
+            if score:
+                candidates.append((score, idx, frame, meta))
+
+        iframe_handles = page.query_selector_all("iframe")
+        for idx, iframe in enumerate(iframe_handles):
+            try:
+                meta = iframe.evaluate(
+                    """e => ({
+                        id: e.id,
+                        name: e.getAttribute('name'),
+                        title: e.getAttribute('title'),
+                        src: e.getAttribute('src'),
+                        style: e.getAttribute('style'),
+                        box: (() => {
+                            const r = e.getBoundingClientRect();
+                            return {x: r.x, y: r.y, width: r.width, height: r.height};
+                        })()
+                    })"""
+                )
+            except Exception as e:
+                meta = {"error": repr(e)}
+            frame = iframe.content_frame()
+            if not frame:
+                continue
+            score = 0
+            meta["source"] = "top_iframe_element"
+            title = meta.get("title") or ""
+            if "验证" in title or "challenge" in title.lower():
+                score += 5
+            try:
+                if frame.locator('[aria-label="可访问性挑战"]').count() > 0:
+                    score += 10
+                if frame.locator('[aria-label="再次按下"]').count() > 0:
+                    score += 10
+                if frame.locator("button, [role=button], [aria-label]").count() > 0:
+                    score += 2
+            except Exception:
+                pass
+            candidates.append((score, idx, frame, meta))
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        if not candidates or candidates[0][0] <= 0:
+            raise RuntimeError(f"challenge frame not found; iframe_count={len(iframe_handles)}")
+        score, idx, frame, meta = candidates[0]
+        print(f"[Captcha] - using iframe index={idx} score={score} meta={meta}", flush=True)
+        return frame, meta
+
+    def _click_locator_or_box(self, page, locator, label):
+        try:
+            locator.first.click(timeout=8000)
+            print(f"[Captcha] - clicked {label} by locator", flush=True)
+            return True
+        except Exception as e:
+            print(f"[Captcha] - locator click failed for {label}: {e}", flush=True)
+        box = locator.first.bounding_box(timeout=8000)
+        print(f"[Captcha] - {label} fallback box={box}", flush=True)
+        x = box['x'] + box['width'] / 2 + random.randint(-8, 8)
+        y = box['y'] + box['height'] / 2 + random.randint(-8, 8)
+        page.mouse.click(x, y)
+        print(f"[Captcha] - clicked {label} by page coordinates", flush=True)
+        return True
+
     def _browser_path(self):
         env_path = os.environ.get("OUTLOOK_BROWSER_PATH", "").strip()
         if env_path:
@@ -82,39 +158,31 @@ class PatchrightController(BaseBrowserController):
         
     def handle_captcha(self, page):
 
-        frame1 = page.frame_locator('iframe[title="验证质询"]')
-        frame2 = frame1.frame_locator('iframe[style*="display: block"]')
+        challenge_frame, frame_meta = self._find_challenge_frame(page)
 
 
         for attempt in range(0, self.max_captcha_retries + 1):
 
             page.wait_for_timeout(200)
             print(f"[Captcha] - attempt {attempt + 1}/{self.max_captcha_retries + 1}: locating accessibility challenge", flush=True)
-            loc = frame2.locator('[aria-label="可访问性挑战"]')
+            loc = challenge_frame.locator('[aria-label="可访问性挑战"]')
             try:
                 print(f"[Captcha] - accessibility count={loc.count()}", flush=True)
             except Exception as e:
                 print(f"[Captcha] - accessibility count error={e}", flush=True)
-            box = loc.bounding_box()
-            print(f"[Captcha] - accessibility box={box}", flush=True)
-            x = box['x'] + box['width'] / 2 + random.randint(-10, 10)
-            y = box['y'] + box['height'] / 2 + random.randint(-10, 10)
-            page.mouse.click(x, y)
+            self._click_locator_or_box(page, loc, "accessibility_challenge")
+            page.wait_for_timeout(random.randint(400, 900))
 
-            loc2 = frame2.locator('[aria-label="再次按下"]')
+            loc2 = challenge_frame.locator('[aria-label="再次按下"]')
             try:
                 print(f"[Captcha] - press_again count={loc2.count()}", flush=True)
             except Exception as e:
                 print(f"[Captcha] - press_again count error={e}", flush=True)
-            box2 = loc2.bounding_box()
-            print(f"[Captcha] - press_again box={box2}", flush=True)
-            x = box2['x'] + box2['width'] / 2 + random.randint(-20, 20)
-            y = box2['y'] + box2['height'] / 2 + random.randint(-13, 13)
-            page.mouse.click(x, y)
+            self._click_locator_or_box(page, loc2, "press_again")
 
             try:
 
-                page.locator('.draw').wait_for(state="detached")
+                challenge_frame.locator('.draw').wait_for(state="detached", timeout=12000)
                 try:
 
                     # 简单的认为加载8秒后成功，暂不考虑请求.
@@ -123,7 +191,7 @@ class PatchrightController(BaseBrowserController):
                     if page.get_by_text('一些异常活动').count() or page.get_by_text('此站点正在维护，暂时无法使用，请稍后重试。').count() > 0:
                         print("[Error: Rate limit] - 正常通过验证码，但当前IP注册频率过快。")
                         return False
-                    elif frame2.locator('[aria-label="可访问性挑战"]').count() > 0:
+                    elif challenge_frame.locator('[aria-label="可访问性挑战"]').count() > 0:
                         self.capture_debug_state(page, f"captcha_attempt_{attempt + 1}_challenge_still_visible")
                         continue
                     break
@@ -133,7 +201,7 @@ class PatchrightController(BaseBrowserController):
                     if page.get_by_text('取消').count() > 0:
                         break
                     self.capture_debug_state(page, f"captcha_attempt_{attempt + 1}_retry_text_wait")
-                    frame1.get_by_text("请再试一次").wait_for(timeout=15000)
+                    challenge_frame.get_by_text("请再试一次").wait_for(timeout=15000)
                     continue
 
             except:
