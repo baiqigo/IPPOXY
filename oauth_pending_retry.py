@@ -107,7 +107,7 @@ def main():
         if result.get("ok"):
             success += 1
     print(f"[PendingRetry] - success={success}/{len(candidates)}", flush=True)
-    return 0 if success or not candidates else 1
+    return 0
 
 
 if __name__ == "__main__":
