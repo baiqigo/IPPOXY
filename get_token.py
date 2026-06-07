@@ -6,10 +6,11 @@ import secrets
 import requests
 from datetime import datetime
 from urllib.request import getproxies
-from urllib.parse import quote, parse_qs, urlparse
+from urllib.parse import quote, parse_qs, urlparse, urljoin
 import os
 import time
 from pathlib import Path
+from html.parser import HTMLParser
 
 def get_proxy():
     proxies = getproxies()
@@ -18,6 +19,17 @@ def get_proxy():
         return {"http": http_proxy, "https": http_proxy}
     return {"http": None, "https": None}
 
+
+def get_oauth_proxy(data=None):
+    proxy = os.environ.get("OUTLOOK_PROXY", "").strip()
+    if not proxy and data:
+        proxy = str(data.get("proxy", "")).strip()
+    if proxy.startswith("http://") or proxy.startswith("https://"):
+        return {"http": proxy, "https": proxy}
+    if proxy.startswith("socks"):
+        print(f"[OAuth2:Protocol] - SOCKS proxy unsupported by requests without extra deps: {proxy}", flush=True)
+    return get_proxy()
+
 def generate_code_verifier(length=128):
     alphabet = string.ascii_letters + string.digits + '-._~'
     return ''.join(secrets.choice(alphabet) for _ in range(length))
@@ -25,6 +37,31 @@ def generate_code_verifier(length=128):
 def generate_code_challenge(code_verifier):
     sha256_hash = hashlib.sha256(code_verifier.encode()).digest()
     return base64.urlsafe_b64encode(sha256_hash).decode().rstrip('=')
+
+
+class _FormParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.forms = []
+        self._current = None
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag.lower() == "form":
+            self._current = {
+                "action": attrs.get("action", ""),
+                "method": attrs.get("method", "get").lower(),
+                "inputs": {},
+            }
+            self.forms.append(self._current)
+        elif self._current is not None and tag.lower() in ("input", "button"):
+            name = attrs.get("name")
+            if name:
+                self._current["inputs"][name] = attrs.get("value", "")
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "form":
+            self._current = None
 
 def _click_if_visible(locator, timeout=3000):
     try:
@@ -416,6 +453,17 @@ def handle_oauth2_form(page, email, password=None):
 
 
 def get_access_token(page, email, password=None, max_retries=3):
+    method = os.environ.get("OUTLOOK_OAUTH_METHOD", "protocol").strip().lower()
+    browser_fallback = os.environ.get("OUTLOOK_OAUTH_BROWSER_FALLBACK", "").strip().lower() in ("1", "true", "yes")
+    if method in ("protocol", "protocol_then_browser"):
+        for attempt in range(max_retries):
+            result = _try_get_access_token_protocol(page, email, password=password, attempt=attempt + 1)
+            if result[0] is not False:
+                return result
+        if method == "protocol" and not browser_fallback:
+            print("[OAuth2:Protocol] - failed and browser fallback disabled", flush=True)
+            return False, False, False
+
     for attempt in range(max_retries):
         result = _try_get_access_token(page, email, password=password, attempt=attempt + 1)
         if result[0] is not False:
@@ -434,7 +482,7 @@ def _safe_page_state(page):
     return url, title
 
 
-def _try_get_access_token(page, email, password=None, attempt=1):
+def _load_oauth_settings(email):
     with open('config.json', 'r', encoding='utf-8') as f:
         data = json.load(f)
     env_scopes = os.environ.get("OUTLOOK_OAUTH_SCOPES", "").strip()
@@ -452,7 +500,7 @@ def _try_get_access_token(page, email, password=None, attempt=1):
             "OUTLOOK_OAUTH_CLIENT_ID/OUTLOOK_OAUTH_REDIRECT_URL.",
             flush=True,
         )
-        return False, False, False
+        return None
     
     code_verifier = generate_code_verifier()
     code_challenge = generate_code_challenge(code_verifier)
@@ -472,6 +520,216 @@ def _try_get_access_token(page, email, password=None, attempt=1):
         params['domain_hint'] = domain_hint
 
     authorize_url = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize?{'&'.join(f'{k}={quote(v)}' for k, v in params.items())}"
+    return {
+        "data": data,
+        "scopes": SCOPES,
+        "client_id": client_id,
+        "redirect_url": redirect_url,
+        "tenant": tenant,
+        "code_verifier": code_verifier,
+        "authorize_url": authorize_url,
+        "email_full": f"{email}{_email_suffix}",
+    }
+
+
+def _exchange_auth_code(settings, auth_code):
+    response = requests.post(
+        f"https://login.microsoftonline.com/{settings['tenant']}/oauth2/v2.0/token",
+        data={
+            'client_id': settings["client_id"],
+            'code': auth_code,
+            'redirect_uri': settings["redirect_url"],
+            'grant_type': 'authorization_code',
+            'code_verifier': settings["code_verifier"],
+            'scope': ' '.join(settings["scopes"])
+        },
+        headers={'Content-Type': 'application/x-www-form-urlencoded'},
+        proxies=get_oauth_proxy(settings.get("data")),
+        timeout=30,
+    )
+
+    try:
+        tokens = response.json()
+    except Exception:
+        print(
+            f"[Error: OAuth2] - token response is not json "
+            f"status={response.status_code} body={response.text[:300]}",
+            flush=True,
+        )
+        return False, False, False
+    if 'refresh_token' in tokens:
+        return (
+            tokens['refresh_token'],
+            tokens.get('access_token', ''),
+            datetime.now().timestamp() + tokens['expires_in']
+        )
+    print(
+        f"[Error: OAuth2] - token response missing refresh_token "
+        f"status={response.status_code} body={str(tokens)[:300]}",
+        flush=True,
+    )
+    return False, False, False
+
+
+def _session_from_page_context(page):
+    session = requests.Session()
+    try:
+        user_agent = page.evaluate("() => navigator.userAgent")
+    except Exception:
+        user_agent = ""
+    session.headers.update({
+        "User-Agent": user_agent or "Mozilla/5.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    })
+    cookies = []
+    try:
+        cookies = page.context.cookies()
+    except Exception as e:
+        print(f"[OAuth2:Protocol] - export cookies failed: {e}", flush=True)
+    for cookie in cookies:
+        domain = cookie.get("domain") or ""
+        if not any(part in domain for part in ("live.com", "microsoft.com", "microsoftonline.com", "outlook.com")):
+            continue
+        session.cookies.set(
+            cookie.get("name", ""),
+            cookie.get("value", ""),
+            domain=domain,
+            path=cookie.get("path") or "/",
+            secure=bool(cookie.get("secure")),
+        )
+    print(f"[OAuth2:Protocol] - imported Microsoft cookies={len(session.cookies)}", flush=True)
+    return session
+
+
+def _parse_forms(html):
+    parser = _FormParser()
+    try:
+        parser.feed(html or "")
+    except Exception:
+        pass
+    return parser.forms
+
+
+def _submit_protocol_form(session, response, email, password):
+    forms = _parse_forms(response.text)
+    if not forms:
+        return None, "no_form"
+
+    def form_score(item):
+        inputs = item.get("inputs") or {}
+        keys = {key.lower() for key in inputs}
+        score = 0
+        if {"loginfmt", "login", "username", "email"} & keys:
+            score += 3
+        if {"passwd", "password"} & keys:
+            score += 3
+        if {"otc", "code", "proofconfirmation"} & keys:
+            score += 1
+        if item.get("action"):
+            score += 1
+        return score
+
+    form = max(forms, key=form_score)
+    data = dict(form.get("inputs") or {})
+    keys = set(data)
+    lowered = {k.lower(): k for k in keys}
+
+    login_key = lowered.get("loginfmt") or lowered.get("login") or lowered.get("username") or lowered.get("email")
+    password_key = lowered.get("passwd") or lowered.get("password")
+    if login_key:
+        data[login_key] = email
+    if password_key and password:
+        data[password_key] = password
+
+    action = form.get("action") or response.url
+    url = urljoin(response.url, action)
+    method = (form.get("method") or "get").lower()
+    headers = {"Referer": response.url, "Origin": f"{urlparse(response.url).scheme}://{urlparse(response.url).netloc}"}
+    print(
+        f"[OAuth2:Protocol] - submitting form method={method} url={urlparse(url).netloc}{urlparse(url).path} "
+        f"login_field={bool(login_key)} password_field={bool(password_key)} keys={len(data)}",
+        flush=True,
+    )
+    if method == "post":
+        return session.post(url, data=data, headers=headers, allow_redirects=False, timeout=30), "posted_form"
+    return session.get(url, params=data, headers=headers, allow_redirects=False, timeout=30), "submitted_form"
+
+
+def _try_get_access_token_protocol(page, email, password=None, attempt=1):
+    settings = _load_oauth_settings(email)
+    if not settings:
+        return False, False, False
+
+    session = _session_from_page_context(page)
+    proxies = get_oauth_proxy(settings.get("data"))
+    session.proxies.update({k: v for k, v in (proxies or {}).items() if v})
+    url = settings["authorize_url"]
+    pending_response = None
+    print(f"[OAuth2:Protocol] - authorize attempt {attempt} tenant={settings['tenant']}", flush=True)
+
+    try:
+        for step in range(12):
+            if pending_response is None:
+                response = session.get(url, allow_redirects=False, proxies=proxies, timeout=30)
+            else:
+                response = pending_response
+                pending_response = None
+            print(
+                f"[OAuth2:Protocol] - step={step} status={response.status_code} "
+                f"url={urlparse(response.url).netloc}{urlparse(response.url).path}",
+                flush=True,
+            )
+
+            if _is_redirect_navigation(response.url, settings["redirect_url"]) and _url_has_auth_code(response.url):
+                return _exchange_auth_code(settings, _extract_auth_code(response.url))
+
+            if response.status_code in (301, 302, 303, 307, 308):
+                location = response.headers.get("Location", "")
+                next_url = urljoin(response.url, location)
+                if _is_redirect_navigation(next_url, settings["redirect_url"]) and _url_has_auth_code(next_url):
+                    print("[OAuth2:Protocol] - captured code from redirect", flush=True)
+                    return _exchange_auth_code(settings, _extract_auth_code(next_url))
+                url = next_url
+                continue
+
+            if response.status_code >= 400:
+                print(f"[OAuth2:Protocol] - stopping on http {response.status_code}", flush=True)
+                break
+
+            submitted, reason = _submit_protocol_form(session, response, settings["email_full"], password)
+            if not submitted:
+                print(f"[OAuth2:Protocol] - no protocol form progress reason={reason}", flush=True)
+                break
+            response = submitted
+            if _is_redirect_navigation(response.url, settings["redirect_url"]) and _url_has_auth_code(response.url):
+                return _exchange_auth_code(settings, _extract_auth_code(response.url))
+            if response.status_code in (301, 302, 303, 307, 308):
+                location = response.headers.get("Location", "")
+                url = urljoin(response.url, location)
+                if _is_redirect_navigation(url, settings["redirect_url"]) and _url_has_auth_code(url):
+                    print("[OAuth2:Protocol] - captured code from form redirect", flush=True)
+                    return _exchange_auth_code(settings, _extract_auth_code(url))
+                continue
+            url = response.url
+            pending_response = response
+    except Exception as e:
+        print(f"[OAuth2:Protocol] - failed: {e}", flush=True)
+
+    return False, False, False
+
+
+def _try_get_access_token(page, email, password=None, attempt=1):
+    settings = _load_oauth_settings(email)
+    if not settings:
+        return False, False, False
+    SCOPES = settings["scopes"]
+    client_id = settings["client_id"]
+    redirect_url = settings["redirect_url"]
+    tenant = settings["tenant"]
+    code_verifier = settings["code_verifier"]
+    authorize_url = settings["authorize_url"]
+    email_full = settings["email_full"]
     print(f"[OAuth2] - authorize attempt {attempt} tenant={tenant}", flush=True)
 
     captured_url = None
@@ -503,7 +761,7 @@ def _try_get_access_token(page, email, password=None, attempt=1):
             print(f"[Error: OAuth2] - authorize navigation failed: {e}", flush=True)
             return False, False, False
 
-        handle_oauth2_form(page, f"{email}{_email_suffix}", password=password)
+        handle_oauth2_form(page, email_full, password=password)
         _log_oauth_controls(page)
 
         max_refreshes = 1
@@ -549,33 +807,7 @@ def _try_get_access_token(page, email, password=None, attempt=1):
     auth_code = _extract_auth_code(captured_url)
 
     try:
-        response = requests.post(
-            f'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token',
-            data={
-                'client_id': client_id,
-                'code': auth_code,
-                'redirect_uri': redirect_url,
-                'grant_type': 'authorization_code',
-                'code_verifier': code_verifier,
-                'scope': ' '.join(SCOPES)
-            },
-            headers={'Content-Type': 'application/x-www-form-urlencoded'},
-            proxies=get_proxy(),
-            timeout=30,
-        )
-
-        tokens = response.json()
-        if 'refresh_token' in tokens:
-            return (
-                tokens['refresh_token'],
-                tokens.get('access_token', ''),
-                datetime.now().timestamp() + tokens['expires_in']
-            )
-        print(
-            f"[Error: OAuth2] - token response missing refresh_token "
-            f"status={response.status_code} body={str(tokens)[:300]}",
-            flush=True,
-        )
+        return _exchange_auth_code(settings, auth_code)
     except Exception as e:
         print(f"[Error: OAuth2] - token exchange failed: {e}", flush=True)
         return False, False, False
