@@ -86,17 +86,28 @@ class PatchrightController(BaseBrowserController):
         frame2 = frame1.frame_locator('iframe[style*="display: block"]')
 
 
-        for _ in range(0, self.max_captcha_retries + 1):
+        for attempt in range(0, self.max_captcha_retries + 1):
 
             page.wait_for_timeout(200)
+            print(f"[Captcha] - attempt {attempt + 1}/{self.max_captcha_retries + 1}: locating accessibility challenge", flush=True)
             loc = frame2.locator('[aria-label="可访问性挑战"]')
+            try:
+                print(f"[Captcha] - accessibility count={loc.count()}", flush=True)
+            except Exception as e:
+                print(f"[Captcha] - accessibility count error={e}", flush=True)
             box = loc.bounding_box()
+            print(f"[Captcha] - accessibility box={box}", flush=True)
             x = box['x'] + box['width'] / 2 + random.randint(-10, 10)
             y = box['y'] + box['height'] / 2 + random.randint(-10, 10)
             page.mouse.click(x, y)
 
             loc2 = frame2.locator('[aria-label="再次按下"]')
+            try:
+                print(f"[Captcha] - press_again count={loc2.count()}", flush=True)
+            except Exception as e:
+                print(f"[Captcha] - press_again count error={e}", flush=True)
             box2 = loc2.bounding_box()
+            print(f"[Captcha] - press_again box={box2}", flush=True)
             x = box2['x'] + box2['width'] / 2 + random.randint(-20, 20)
             y = box2['y'] + box2['height'] / 2 + random.randint(-13, 13)
             page.mouse.click(x, y)
@@ -113,6 +124,7 @@ class PatchrightController(BaseBrowserController):
                         print("[Error: Rate limit] - 正常通过验证码，但当前IP注册频率过快。")
                         return False
                     elif frame2.locator('[aria-label="可访问性挑战"]').count() > 0:
+                        self.capture_debug_state(page, f"captcha_attempt_{attempt + 1}_challenge_still_visible")
                         continue
                     break
 
@@ -120,14 +132,17 @@ class PatchrightController(BaseBrowserController):
 
                     if page.get_by_text('取消').count() > 0:
                         break
+                    self.capture_debug_state(page, f"captcha_attempt_{attempt + 1}_retry_text_wait")
                     frame1.get_by_text("请再试一次").wait_for(timeout=15000)
                     continue
 
             except:
                 if page.get_by_text('取消').count() > 0:
                      break
+                self.capture_debug_state(page, f"captcha_attempt_{attempt + 1}_outer_failure")
                 return False
         else: 
+            self.capture_debug_state(page, "captcha_attempts_exhausted")
             return False
 
         return True

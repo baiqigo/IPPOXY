@@ -3,6 +3,7 @@ import time
 import json
 import random
 import threading
+from pathlib import Path
 from faker import Faker
 from abc import ABC, abstractmethod
 
@@ -27,6 +28,8 @@ class BaseBrowserController(ABC):
 
         self.results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Results')
         os.makedirs(self.results_dir, exist_ok=True)
+        self.captures_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'captures')
+        os.makedirs(self.captures_dir, exist_ok=True)
 
 
     @abstractmethod
@@ -77,6 +80,122 @@ class BaseBrowserController(ABC):
 
         return self.thread_local.browser
 
+    def capture_debug_state(self, page, label):
+        """
+        Save a small forensic snapshot for anti-bot/challenge failures.
+        """
+        if not page:
+            return
+
+        ts = int(time.time())
+        safe_label = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in label)[:80]
+        base = Path(self.captures_dir) / f"{ts}_{safe_label}"
+        data = {
+            "label": label,
+            "timestamp": ts,
+            "url": "",
+            "title": "",
+            "frames": [],
+            "visible_buttons": [],
+            "visible_inputs": [],
+            "texts": {},
+            "locators": {},
+        }
+
+        try:
+            data["url"] = page.url
+        except Exception as e:
+            data["url_error"] = repr(e)
+        try:
+            data["title"] = page.title(timeout=3000)
+        except Exception as e:
+            data["title_error"] = repr(e)
+
+        try:
+            page.screenshot(path=str(base.with_suffix(".png")), full_page=True, timeout=8000)
+        except Exception as e:
+            data["screenshot_error"] = repr(e)
+
+        try:
+            for frame in page.frames:
+                data["frames"].append({
+                    "name": frame.name,
+                    "url": frame.url,
+                    "title": frame.title(timeout=1000),
+                })
+        except Exception as e:
+            data["frames_error"] = repr(e)
+
+        try:
+            data["visible_buttons"] = page.locator(
+                "button, [role=button], [aria-label]"
+            ).evaluate_all(
+                """els => els.slice(0, 80).map(e => ({
+                    tag: e.tagName,
+                    text: (e.innerText || e.textContent || '').slice(0, 120),
+                    aria: e.getAttribute('aria-label'),
+                    role: e.getAttribute('role'),
+                    id: e.id,
+                    cls: e.className,
+                    visible: !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length)
+                }))"""
+            )
+        except Exception as e:
+            data["visible_buttons_error"] = repr(e)
+
+        try:
+            data["visible_inputs"] = page.locator(
+                "input, select, textarea"
+            ).evaluate_all(
+                """els => els.slice(0, 80).map(e => ({
+                    tag: e.tagName,
+                    name: e.getAttribute('name'),
+                    type: e.getAttribute('type'),
+                    aria: e.getAttribute('aria-label'),
+                    placeholder: e.getAttribute('placeholder'),
+                    value_len: (e.value || '').length,
+                    visible: !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length)
+                }))"""
+            )
+        except Exception as e:
+            data["visible_inputs_error"] = repr(e)
+
+        for text in ("一些异常活动", "此站点正在维护", "请再试一次", "取消", "正在加载"):
+            try:
+                data["texts"][text] = page.get_by_text(text).count()
+            except Exception as e:
+                data["texts"][text] = repr(e)
+
+        locator_checks = {
+            "enforcementFrame": "iframe#enforcementFrame",
+            "challenge_title_frame": 'iframe[title="验证质询"]',
+            "visible_style_frame": 'iframe[style*="display: block"]',
+            "draw": ".draw",
+            "loading_status": '[role="status"][aria-label="正在加载..."]',
+            "accessibility_challenge": '[aria-label="可访问性挑战"]',
+            "press_again": '[aria-label="再次按下"]',
+            "primary_button": '[data-testid="primaryButton"]',
+        }
+        for name, selector in locator_checks.items():
+            try:
+                loc = page.locator(selector)
+                item = {"count": loc.count()}
+                if item["count"]:
+                    try:
+                        item["first_box"] = loc.first.bounding_box(timeout=2000)
+                    except Exception as e:
+                        item["first_box_error"] = repr(e)
+                data["locators"][name] = item
+            except Exception as e:
+                data["locators"][name] = {"error": repr(e)}
+
+        try:
+            with open(base.with_suffix(".json"), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            print(f"[Debug] - saved challenge state: {base}.json")
+        except Exception as e:
+            print(f"[Debug] - failed to save challenge state: {e}")
+
     def outlook_register(self, page, email, password):
         """
         通用逻辑:注册邮箱
@@ -97,6 +216,7 @@ class BaseBrowserController(ABC):
             page.wait_for_timeout(0.1 * self.wait_time)
             page.get_by_text('同意并继续').click(timeout=30000)
         except:
+            self.capture_debug_state(page, "entry_failed")
             print("[Error: IP] - IP质量不佳，无法进入注册界面。")
             return False
 
@@ -142,18 +262,22 @@ class BaseBrowserController(ABC):
             page.wait_for_timeout(400)
 
             if page.get_by_text('一些异常活动').count() or page.get_by_text('此站点正在维护，暂时无法使用，请稍后重试。').count() > 0:
+                self.capture_debug_state(page, "rate_or_abnormal_after_profile")
                 print("[Error: IP or browser] - 当前IP注册频率过快。检查IP与是否为指纹浏览器并关闭了无头模式。")
                 return False
 
             if page.locator('iframe#enforcementFrame').count() > 0:
+                self.capture_debug_state(page, "funcaptcha_type_detected")
                 print("[Error: FunCaptcha] - 验证码类型错误，非按压验证码。")
                 return False
 
             captcha_result = self.handle_captcha(page)
             if not captcha_result:
+                self.capture_debug_state(page, "captcha_result_false")
                 raise TimeoutError
 
         except Exception:
+            self.capture_debug_state(page, "register_exception")
             print("[Error: IP] - 加载超时或因触发机器人检测导致按压次数达到最大仍未通过。")
             return False
 
