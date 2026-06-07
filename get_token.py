@@ -9,6 +9,8 @@ from urllib.request import getproxies
 from urllib.parse import quote, parse_qs, urlparse, urljoin
 import os
 import time
+import re
+import html
 from pathlib import Path
 from html.parser import HTMLParser
 
@@ -611,10 +613,105 @@ def _parse_forms(html):
     return parser.forms
 
 
+def _extract_js_string(text, key):
+    match = re.search(r'"' + re.escape(key) + r'"\s*:\s*"((?:\\.|[^"\\])*)"', text or "")
+    if not match:
+        return ""
+    try:
+        return json.loads(f'"{match.group(1)}"')
+    except Exception:
+        return ""
+
+
+def _submit_msa_config_login(session, response, email, password):
+    if not password:
+        return None, "missing_password"
+
+    url_post = _extract_js_string(response.text, "urlPost") or _extract_js_string(response.text, "urlPostMsa")
+    url_get_credential = _extract_js_string(response.text, "urlGetCredentialType")
+    ft_tag = html.unescape(_extract_js_string(response.text, "sFTTag"))
+    ppft_match = re.search(r'name="PPFT"[^>]*value="([^"]+)"', ft_tag)
+    if not url_post or not ppft_match:
+        return None, "no_msa_config"
+
+    ppft = ppft_match.group(1)
+    uaid = _extract_js_string(response.text, "sUnauthSessionID")
+    hpgid = _extract_js_string(response.text, "hpgid")
+    if url_get_credential:
+        credential_payload = {
+            "username": email,
+            "uaid": uaid,
+            "isOtherIdpSupported": True,
+            "checkPhones": False,
+            "isRemoteNGCSupported": True,
+            "isCookieBannerShown": False,
+            "isFidoSupported": False,
+            "forceotclogin": False,
+            "otclogindisallowed": False,
+            "isExternalFederationDisallowed": False,
+            "isRemoteConnectSupported": False,
+            "federationFlags": 3,
+            "isSignup": False,
+            "flowToken": ppft,
+        }
+        try:
+            credential_response = session.post(
+                url_get_credential,
+                json=credential_payload,
+                headers={
+                    "Referer": response.url,
+                    "Origin": "https://login.live.com",
+                    "hpgid": str(hpgid or ""),
+                    "hpgact": "0",
+                },
+                allow_redirects=False,
+                timeout=30,
+            )
+            print(
+                f"[OAuth2:Protocol] - GetCredentialType status={credential_response.status_code} "
+                f"body={credential_response.text[:180]}",
+                flush=True,
+            )
+        except Exception as e:
+            print(f"[OAuth2:Protocol] - GetCredentialType failed: {e}", flush=True)
+
+    data = {
+        "login": email,
+        "loginfmt": email,
+        "passwd": password,
+        "PPFT": ppft,
+        "PPSX": "Passpor",
+        "NewUser": "1",
+        "LoginOptions": "3",
+        "type": "11",
+        "i13": "0",
+        "ps": "2",
+        "flowToken": ppft,
+        "fspost": "0",
+        "CookieDisclosure": "0",
+        "IsFidoSupported": "0",
+        "isSignupPost": "0",
+        "isRecoveryAttemptPost": "0",
+        "i19": "3772",
+    }
+    print(
+        f"[OAuth2:Protocol] - submitting MSA config login url={urlparse(url_post).netloc}{urlparse(url_post).path} "
+        f"ppft_len={len(ppft)}",
+        flush=True,
+    )
+    return session.post(
+        url_post,
+        data=data,
+        headers={"Referer": response.url, "Origin": "https://login.live.com"},
+        allow_redirects=False,
+        timeout=30,
+    ), "posted_msa_config"
+
+
 def _submit_protocol_form(session, response, email, password):
     forms = _parse_forms(response.text)
     if not forms:
-        return None, "no_form"
+        return _submit_msa_config_login(session, response, email, password)
 
     def form_score(item):
         inputs = item.get("inputs") or {}
