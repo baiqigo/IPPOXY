@@ -199,6 +199,7 @@ def _try_get_access_token(page, email, password=None, attempt=1):
     SCOPES = env_scopes.split() if env_scopes else data['oauth2']['Scopes']
     client_id = os.environ.get("OUTLOOK_OAUTH_CLIENT_ID", "").strip() or data['oauth2']['client_id'].strip()
     redirect_url = os.environ.get("OUTLOOK_OAUTH_REDIRECT_URL", "").strip() or data['oauth2']['redirect_url'].strip()
+    prompt = os.environ.get("OUTLOOK_OAUTH_PROMPT", "consent").strip()
     _email_suffix = data['email_suffix']
     if not client_id or not redirect_url:
         print(
@@ -217,10 +218,11 @@ def _try_get_access_token(page, email, password=None, attempt=1):
         'redirect_uri': redirect_url,
         'scope': ' '.join(SCOPES),
         'response_mode': 'query',
-        'prompt': 'select_account',
         'code_challenge': code_challenge,
         'code_challenge_method': 'S256'
     }
+    if prompt:
+        params['prompt'] = prompt
 
     authorize_url = f"https://login.microsoftonline.com/common/oauth2/v2.0/authorize?{'&'.join(f'{k}={quote(v)}' for k, v in params.items())}"
     print(f"[OAuth2] - authorize attempt {attempt}", flush=True)
