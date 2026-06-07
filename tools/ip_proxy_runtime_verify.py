@@ -46,8 +46,10 @@ def main() -> None:
     resin_tests = []
     for identity in ("IPPOXY_RES.test1", "IPPOXY_STATIC.test1", "IPPOXY_ALL.test1"):
         try:
-            got = curl(["--proxy", "socks5h://127.0.0.1:2260", "-U", f"{identity}:daytona", "https://api.ipify.org"], timeout=35)
-            ok = bool(got)
+            socks_got = curl(["--proxy", "socks5h://127.0.0.1:2260", "-U", f"{identity}:daytona", "https://api.ipify.org"], timeout=35)
+            http_got = curl(["--proxy", f"http://{identity}:daytona@127.0.0.1:2260", "https://api.ipify.org"], timeout=35)
+            ok = bool(socks_got) and bool(http_got)
+            got = {"socks5h": socks_got, "http": http_got}
         except Exception as exc:
             got = str(exc)
             ok = False
@@ -82,8 +84,8 @@ def main() -> None:
         encoding="utf-8",
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    min_ports_ok = int(os.environ.get("IP_PROXY_MIN_PORTS_OK", "1"))
-    min_resin_ok = int(os.environ.get("IP_PROXY_MIN_RESIN_OK", "1"))
+    min_ports_ok = int(os.environ.get("IP_PROXY_MIN_PORTS_OK", "23"))
+    min_resin_ok = int(os.environ.get("IP_PROXY_MIN_RESIN_OK", "3"))
     if result["ports_ok"] < min_ports_ok or result["resin_ok"] < min_resin_ok:
         sys.exit(1)
 

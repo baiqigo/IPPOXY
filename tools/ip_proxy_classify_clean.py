@@ -31,6 +31,11 @@ def write_json(path: Path, data: object) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def display_date(run_id: str) -> str:
+    date = run_id[:8] if len(run_id) >= 8 and run_id[:8].isdigit() else time.strftime("%Y%m%d")
+    return f"{date[:4]}-{date[4:6]}-{date[6:8]}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, default=CHECK_JSON)
@@ -66,7 +71,7 @@ def main() -> int:
         )
 
     lines = [
-        "# Clean Candidate Classification 2026-06-08",
+        f"# Clean Candidate Classification {display_date(run_id)}",
         "",
         f"- Run ID: `{run_id}`",
         f"- Clean candidates: {len(clean)}",

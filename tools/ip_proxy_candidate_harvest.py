@@ -229,6 +229,15 @@ def write_json(path: Path, data: object) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def run_date(run_id: str) -> str:
+    return run_id[:8] if len(run_id) >= 8 and run_id[:8].isdigit() else time.strftime("%Y%m%d")
+
+
+def display_date(run_id: str) -> str:
+    date = run_date(run_id)
+    return f"{date[:4]}-{date[4:6]}-{date[6:8]}"
+
+
 def extract_port(raw: str) -> int | None:
     m = re.search(r":(\d+)(?:[/?#]|$)", raw)
     return int(m.group(1)) if m else None
@@ -282,6 +291,7 @@ def check_candidate(item: dict, timeout: int) -> dict:
 def write_outputs(candidates: list[dict], results: list[dict], run_id: str) -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     RESIN_DIR.mkdir(parents=True, exist_ok=True)
+    date_id = run_date(run_id)
 
     write_json(RUNTIME_DIR / f"proxy_candidate_pool_{run_id}.json", candidates)
     write_json(RUNTIME_DIR / "proxy_candidate_pool.latest.json", candidates)
@@ -297,7 +307,7 @@ def write_outputs(candidates: list[dict], results: list[dict], run_id: str) -> N
         [r for r in clean if r["kind"] == "sstp"],
         key=lambda r: (0 if r.get("port") == 443 else 1, r.get("responseTime") or 999999),
     )
-    (RESIN_DIR / "turn_clean_candidates_20260608.txt").write_text(
+    (RESIN_DIR / f"turn_clean_candidates_{date_id}.txt").write_text(
         "\n".join(r["raw"] for r in turn) + "\n",
         encoding="utf-8",
     )
@@ -309,7 +319,7 @@ def write_outputs(candidates: list[dict], results: list[dict], run_id: str) -> N
         [r for r in clean if r["kind"] == "socks5"],
         key=lambda r: r.get("responseTime") or 999999,
     )
-    (RESIN_DIR / "sstp_clean_candidates_20260608.txt").write_text(
+    (RESIN_DIR / f"sstp_clean_candidates_{date_id}.txt").write_text(
         "\n".join(r["raw"] for r in sstp) + "\n",
         encoding="utf-8",
     )
@@ -317,7 +327,7 @@ def write_outputs(candidates: list[dict], results: list[dict], run_id: str) -> N
         "\n".join(r["raw"] for r in sstp) + "\n",
         encoding="utf-8",
     )
-    (RESIN_DIR / "socks5_clean_candidates_20260608.txt").write_text(
+    (RESIN_DIR / f"socks5_clean_candidates_{date_id}.txt").write_text(
         ("\n".join(r["raw"] for r in socks5) + "\n") if socks5 else "",
         encoding="utf-8",
     )
@@ -334,7 +344,7 @@ def write_outputs(candidates: list[dict], results: list[dict], run_id: str) -> N
         row["clean"] += int(bool(r.get("clean")))
 
     lines = [
-        "# Proxy Candidate Check 2026-06-08",
+        f"# Proxy Candidate Check {display_date(run_id)}",
         "",
         f"Run ID: `{run_id}`",
         "",

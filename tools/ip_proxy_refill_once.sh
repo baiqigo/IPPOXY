@@ -12,7 +12,6 @@ MAX_SOCKS_PER_SOURCE="${MAX_SOCKS_PER_SOURCE:-200}"
 WITH_GROK="${WITH_GROK:-0}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
-mkdir -p docs/ip-proxy/research/runtime docs/ip-proxy/resin
 mkdir -p .runtime/ip-proxy/research .runtime/ip-proxy/resin
 
 if [[ "$WITH_GROK" == "1" ]]; then
@@ -34,8 +33,11 @@ fi
   --run-id "$RUN_ID" \
   --input ".runtime/ip-proxy/research/proxy_candidate_check_${RUN_ID}.json"
 
-POOL_REFRESH_JSON="$("$PYTHON_BIN" tools/ip_proxy_pool_refresh.py \
-  --input ".runtime/ip-proxy/resin/clean_candidates_classified.latest.json")"
+POOL_REFRESH_ARGS=(--input ".runtime/ip-proxy/resin/clean_candidates_classified.latest.json")
+if [[ "${IP_PROXY_APPLY_RUNTIME:-1}" != "1" ]]; then
+  POOL_REFRESH_ARGS+=(--dry-run)
+fi
+POOL_REFRESH_JSON="$("$PYTHON_BIN" tools/ip_proxy_pool_refresh.py "${POOL_REFRESH_ARGS[@]}")"
 echo "$POOL_REFRESH_JSON"
 
 POOL_CHANGED="$("$PYTHON_BIN" -c 'import json,sys; print("1" if json.loads(sys.argv[1]).get("changed") else "0")' "$POOL_REFRESH_JSON")"

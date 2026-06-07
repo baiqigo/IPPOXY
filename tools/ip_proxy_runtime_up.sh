@@ -24,13 +24,24 @@ stop_pid_file() {
   fi
 }
 
+is_ippoxy_xray_process() {
+  local pid="$1"
+  local cmd
+  cmd="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+  [ -n "$cmd" ] && echo "$cmd" | grep -Eiq 'xray|ip-proxy-poc|IPPOXY|ippoxy'
+}
+
 stop_port_owner() {
   local port="$1"
   local pids
   pids="$(ss -ltnp 2>/dev/null | awk -v port=":${port}" '$0 ~ port { if (match($0, /pid=[0-9]+/)) { print substr($0, RSTART + 4, RLENGTH - 4) } }' | sort -u)"
   if [ -n "$pids" ]; then
     for pid in $pids; do
-      kill "$pid" 2>/dev/null || true
+      if is_ippoxy_xray_process "$pid"; then
+        kill "$pid" 2>/dev/null || true
+      else
+        echo "refusing to kill non-IPPOXY port owner pid=$pid port=$port" >&2
+      fi
     done
   fi
 }
@@ -48,12 +59,14 @@ wait_port_free() {
   return 1
 }
 
+cd "$ROOT"
+docker compose -f docker-compose.ipproxy.yml pull xray-turn-pool resin
+docker compose -f docker-compose.ipproxy.yml run --rm --no-deps xray-turn-pool run -test -config /usr/local/etc/xray/config.json
+
 stop_pid_file
 if [ -x /home/daytona/ip-proxy-poc/rotate/stop_turn_pool.sh ]; then
   bash /home/daytona/ip-proxy-poc/rotate/stop_turn_pool.sh || true
 fi
-
-cd "$ROOT"
 docker compose -f docker-compose.ipproxy.yml rm -sf xray-turn-pool >/dev/null 2>&1 || true
 
 for port in $(seq 19080 19104); do
@@ -64,8 +77,6 @@ for port in $(seq 19080 19104); do
   wait_port_free "$port"
 done
 
-docker compose -f docker-compose.ipproxy.yml pull xray-turn-pool resin
-docker compose -f docker-compose.ipproxy.yml run --rm --no-deps xray-turn-pool run -test -config /usr/local/etc/xray/config.json
 docker compose -f docker-compose.ipproxy.yml up -d xray-turn-pool resin
 
 for port in 19080 19104; do

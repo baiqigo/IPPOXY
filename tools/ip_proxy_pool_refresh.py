@@ -124,6 +124,17 @@ def file_sha(path: Path) -> str | None:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def bytes_sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
 def clean_turn_candidates(path: Path) -> list[dict]:
     data = read_json(path, [])
     if not isinstance(data, list):
@@ -239,12 +250,13 @@ def select_rows(
     }
 
 
-def write_runtime(rows: list[dict], worker_host: str, uuid: str, write_docs: bool) -> dict:
+def write_runtime(rows: list[dict], worker_host: str, uuid: str, write_docs: bool, dry_run: bool) -> dict:
     runtime_conf = RUNTIME / "conf"
     runtime_resin = RUNTIME / "resin"
-    runtime_conf.mkdir(parents=True, exist_ok=True)
-    runtime_resin.mkdir(parents=True, exist_ok=True)
-    RUNTIME.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        runtime_conf.mkdir(parents=True, exist_ok=True)
+        runtime_resin.mkdir(parents=True, exist_ok=True)
+        RUNTIME.mkdir(parents=True, exist_ok=True)
 
     files = {
         "mapping": RUNTIME / "turn_xray_pool_20260608.json",
@@ -257,25 +269,32 @@ def write_runtime(rows: list[dict], worker_host: str, uuid: str, write_docs: boo
 
     local_lines = [f"socks5://127.0.0.1:{row['local_port']}#{row['tag']}" for row in rows]
     vless_lines = [f"{row['vless']}#{row['tag']}" for row in rows]
-    files["mapping"].write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    files["xray"].write_text(
-        json.dumps(xray_config(rows, uuid, worker_host), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    files["subscription"].write_text("\n".join(local_lines) + "\n", encoding="utf-8")
-    files["subscription_alias"].write_text("\n".join(local_lines) + "\n", encoding="utf-8")
-    files["vless"].write_text("\n".join(vless_lines) + "\n", encoding="utf-8")
+    payloads = {
+        "mapping": json.dumps(rows, ensure_ascii=False, indent=2) + "\n",
+        "xray": json.dumps(xray_config(rows, uuid, worker_host), ensure_ascii=False, indent=2) + "\n",
+        "subscription": "\n".join(local_lines) + "\n",
+        "subscription_alias": "\n".join(local_lines) + "\n",
+        "vless": "\n".join(vless_lines) + "\n",
+    }
+    if not dry_run:
+        for name, text in payloads.items():
+            atomic_write_text(files[name], text)
 
     if write_docs:
+        if dry_run:
+            raise SystemExit("--dry-run cannot be combined with --write-docs")
         shutil.copy2(files["mapping"], DOC_RUNTIME_DIR / "turn_xray_pool_20260608.json")
         shutil.copy2(files["xray"], RESIN_DIR / "xray_turn_pool_25.generated.json")
         shutil.copy2(files["subscription"], RESIN_DIR / "turn_xray_pool_25.local.txt")
         shutil.copy2(files["subscription_alias"], RESIN_DIR / "turn_xray_pool.local.txt")
         shutil.copy2(files["vless"], RESIN_DIR / "turn_vless_pool_25.txt")
 
-    after = {name: file_sha(path) for name, path in files.items()}
+    if dry_run:
+        after = {name: bytes_sha(payloads[name].encode("utf-8")) for name in files}
+    else:
+        after = {name: file_sha(path) for name, path in files.items()}
     changed = [name for name in files if before[name] != after[name]]
-    return {"files": {name: str(path) for name, path in files.items()}, "changed_files": changed}
+    return {"files": {name: str(path) for name, path in files.items()}, "changed_files": changed, "dry_run": dry_run}
 
 
 def main() -> int:
@@ -288,6 +307,7 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=int(os.environ.get("IP_PROXY_POOL_SIZE", "25")))
     parser.add_argument("--min-clean", type=int, default=int(os.environ.get("IP_PROXY_MIN_CLEAN", "12")))
     parser.add_argument("--write-docs", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="compute the refresh result without modifying runtime files")
     args = parser.parse_args()
 
     baseline_path = args.baseline if args.baseline.exists() else DEFAULT_BASELINE
@@ -320,7 +340,7 @@ def main() -> int:
     )
     if len(rows) < args.limit:
         raise SystemExit(f"only selected {len(rows)} rows, need {args.limit}")
-    written = write_runtime(rows, args.worker_host, args.uuid, args.write_docs)
+    written = write_runtime(rows, args.worker_host, args.uuid, args.write_docs, args.dry_run)
     result = {
         "status": "ok",
         "changed": bool(written["changed_files"]),
