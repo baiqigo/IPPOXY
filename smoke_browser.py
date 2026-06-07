@@ -1,17 +1,26 @@
 import json
 import os
+import signal
 from pathlib import Path
 
 from controllers.patchright_controller import PatchrightController
 
 
+def _timeout(_signum, _frame):
+    raise TimeoutError("smoke timed out")
+
+
 def main():
+    signal.signal(signal.SIGALRM, _timeout)
+    signal.alarm(120)
+
     with open("config.json", "r", encoding="utf-8") as f:
         config = json.load(f)
 
     controller = PatchrightController()
-    p, context = controller.launch_browser()
-    if not p or not context:
+    print(json.dumps({"stage": "launch", "proxy": config.get("proxy")}, ensure_ascii=False), flush=True)
+    context = controller.get_thread_browser()
+    if not context:
         raise SystemExit(2)
 
     captures = Path(__file__).resolve().parent / "captures"
@@ -31,10 +40,10 @@ def main():
             "browser_path": config.get("patchright", {}).get("browser_path") or os.environ.get("OUTLOOK_BROWSER_PATH", ""),
             "ip": ip_text,
             "title": title,
-        }, ensure_ascii=False))
+        }, ensure_ascii=False), flush=True)
     finally:
-        controller.clean_up(page, "done_browser")
         controller.clean_up(type="all_browser")
+        signal.alarm(0)
 
 
 if __name__ == "__main__":

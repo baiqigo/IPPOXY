@@ -24,4 +24,4 @@ services:
       - ./Results:/app/Results
       - ./captures:/app/captures
       - ./.profiles:/app/.profiles
-    command: ["python", "smoke_browser.py"]
+    command: ["python", "-u", "smoke_browser.py"]
