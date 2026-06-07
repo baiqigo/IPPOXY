@@ -366,17 +366,50 @@ class BaseBrowserController(ABC):
             print("[Error: IP] - 加载超时或因触发机器人检测导致按压次数达到最大仍未通过。")
             return False
 
-        filename = os.path.join(self.results_dir, 'logged_email.txt' if self.enable_oauth2 else 'unlogged_email.txt')
-        with open(filename, 'a', encoding='utf-8') as f:
-            f.write(f"{email}{self.email_suffix}: {password}\n")
-        print(f'[Success: Email Registration] - {email}{self.email_suffix}: {password}')
-
         if not self.enable_oauth2:
+            filename = os.path.join(self.results_dir, 'unlogged_email.txt')
+            with open(filename, 'a', encoding='utf-8') as f:
+                f.write(f"{email}{self.email_suffix}: {password}\n")
+            print(f'[Success: Email Registration] - {email}{self.email_suffix}: {password}')
             return True
 
+        mailbox_ready = False
         try:
             page.locator('[aria-label="新邮件"]').wait_for(timeout=32000)
-            return True
-        except:
-            print('[Warn: MailboxInit] - 邮箱界面未在等待时间内初始化，继续执行 OAuth token 补全。')
-            return True
+            mailbox_ready = True
+            print(f'[MailboxReady] - {email}{self.email_suffix} mailbox UI initialized.', flush=True)
+        except Exception as e:
+            self.capture_debug_state(page, "mailbox_init_timeout")
+            print(f'[Warn: MailboxInit] - 邮箱界面未在等待时间内初始化，等待 MSA 登录侧账号可用。 error={e}', flush=True)
+
+        try:
+            from get_token import wait_msa_login_ready
+            account_ready, account_status = wait_msa_login_ready(page, email)
+        except Exception as e:
+            account_ready = False
+            account_status = {"ok": False, "reason": repr(e)}
+            print(f"[AccountReady] - probe failed: {account_status}", flush=True)
+
+        if not account_ready:
+            pending_file = os.path.join(self.results_dir, 'oauth_pending.txt')
+            with open(pending_file, 'a', encoding='utf-8') as f:
+                f.write(
+                    f"{email}{self.email_suffix}---{password}---"
+                    f"mailbox_ready={mailbox_ready}---account_status={json.dumps(account_status, ensure_ascii=False)}\n"
+                )
+            print(
+                f"[Pending: Email Registration] - {email}{self.email_suffix} "
+                f"mailbox_ready={mailbox_ready} account_status={account_status}",
+                flush=True,
+            )
+            return False
+
+        filename = os.path.join(self.results_dir, 'logged_email.txt')
+        with open(filename, 'a', encoding='utf-8') as f:
+            f.write(f"{email}{self.email_suffix}: {password}\n")
+        print(
+            f'[Success: Email Registration] - {email}{self.email_suffix}: {password} '
+            f'mailbox_ready={mailbox_ready} account_status={account_status}',
+            flush=True,
+        )
+        return True

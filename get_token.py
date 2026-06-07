@@ -163,6 +163,27 @@ def _url_has_auth_code(url):
         return False
 
 
+def _url_has_auth_error(url):
+    try:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        return bool(params.get("error"))
+    except Exception:
+        return False
+
+
+def _extract_auth_error(url):
+    try:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        return {
+            "error": (params.get("error") or [""])[0],
+            "error_description": (params.get("error_description") or [""])[0],
+        }
+    except Exception as e:
+        return {"error": "parse_failed", "error_description": repr(e)}
+
+
 def _extract_auth_code(url):
     parsed = urlparse(url)
     return parse_qs(parsed.query)["code"][0]
@@ -563,7 +584,7 @@ def _exchange_auth_code(settings, auth_code):
         return (
             tokens['refresh_token'],
             tokens.get('access_token', ''),
-            datetime.now().timestamp() + tokens['expires_in']
+            datetime.now().timestamp() + tokens.get('expires_in', 3600)
         )
     print(
         f"[Error: OAuth2] - token response missing refresh_token "
@@ -672,6 +693,17 @@ def _submit_msa_config_login(session, response, email, password):
                 f"body={credential_response.text[:180]}",
                 flush=True,
             )
+            try:
+                credential_data = credential_response.json()
+            except Exception:
+                credential_data = {}
+            credentials = credential_data.get("Credentials") if isinstance(credential_data, dict) else {}
+            if isinstance(credential_data, dict) and credential_data.get("IfExistsResult") == 1:
+                print("[OAuth2:Protocol] - account not visible to MSA login yet", flush=True)
+                return None, "account_not_visible"
+            if isinstance(credentials, dict) and credentials.get("HasPassword") == 0:
+                print("[OAuth2:Protocol] - MSA account has no password credential", flush=True)
+                return None, "account_without_password"
         except Exception as e:
             print(f"[OAuth2:Protocol] - GetCredentialType failed: {e}", flush=True)
 
@@ -713,6 +745,99 @@ def _submit_msa_config_login(session, response, email, password):
         flush=True,
     )
     return login_response, "posted_msa_config"
+
+
+def _fetch_msa_credential_status(page, email):
+    settings = _load_oauth_settings(email)
+    if not settings:
+        return {"ok": False, "reason": "missing_oauth_settings"}
+
+    session = _session_from_page_context(page)
+    proxies = get_oauth_proxy(settings.get("data"))
+    session.proxies.update({k: v for k, v in (proxies or {}).items() if v})
+    try:
+        response = session.get(settings["authorize_url"], allow_redirects=False, proxies=proxies, timeout=30)
+        if response.status_code in (301, 302, 303, 307, 308):
+            response = session.get(urljoin(response.url, response.headers.get("Location", "")), allow_redirects=False, timeout=30)
+
+        url_get_credential = _extract_js_string(response.text, "urlGetCredentialType")
+        ft_tag = html.unescape(_extract_js_string(response.text, "sFTTag"))
+        ppft_match = re.search(r'name="PPFT"[^>]*value="([^"]+)"', ft_tag)
+        if not url_get_credential or not ppft_match:
+            return {
+                "ok": False,
+                "reason": "missing_get_credential_config",
+                "status": response.status_code,
+                "url": response.url,
+                "has_code": _is_redirect_navigation(response.url, settings["redirect_url"]) and _url_has_auth_code(response.url),
+            }
+
+        ppft = ppft_match.group(1)
+        credential_response = session.post(
+            url_get_credential,
+            json={
+                "username": settings["email_full"],
+                "uaid": _extract_js_string(response.text, "sUnauthSessionID"),
+                "isOtherIdpSupported": True,
+                "checkPhones": False,
+                "isRemoteNGCSupported": True,
+                "isCookieBannerShown": False,
+                "isFidoSupported": False,
+                "forceotclogin": False,
+                "otclogindisallowed": False,
+                "isExternalFederationDisallowed": False,
+                "isRemoteConnectSupported": False,
+                "federationFlags": 3,
+                "isSignup": False,
+                "flowToken": ppft,
+            },
+            headers={
+                "Referer": response.url,
+                "Origin": "https://login.live.com",
+                "hpgid": str(_extract_js_string(response.text, "hpgid") or ""),
+                "hpgact": "0",
+            },
+            allow_redirects=False,
+            timeout=30,
+        )
+        try:
+            data = credential_response.json()
+        except Exception:
+            data = {"raw": credential_response.text[:300]}
+        credentials = data.get("Credentials") if isinstance(data, dict) else {}
+        ready = bool(isinstance(credentials, dict) and credentials.get("HasPassword") == 1)
+        if not ready and isinstance(data, dict):
+            ready = data.get("IfExistsResult") == 0
+        return {
+            "ok": True,
+            "ready": ready,
+            "status": credential_response.status_code,
+            "if_exists": data.get("IfExistsResult") if isinstance(data, dict) else None,
+            "has_password": credentials.get("HasPassword") if isinstance(credentials, dict) else None,
+            "body": data,
+        }
+    except Exception as e:
+        return {"ok": False, "reason": repr(e)}
+
+
+def wait_msa_login_ready(page, email, max_wait_seconds=None, interval_seconds=None):
+    if max_wait_seconds is None:
+        max_wait_seconds = int(os.environ.get("OUTLOOK_ACCOUNT_READY_WAIT_SECONDS", "240"))
+    if interval_seconds is None:
+        interval_seconds = int(os.environ.get("OUTLOOK_ACCOUNT_READY_POLL_SECONDS", "12"))
+    deadline = time.time() + max_wait_seconds
+    attempt = 0
+    last_status = {}
+
+    while True:
+        attempt += 1
+        last_status = _fetch_msa_credential_status(page, email)
+        print(f"[AccountReady] - attempt={attempt} status={last_status}", flush=True)
+        if last_status.get("ready"):
+            return True, last_status
+        if time.time() >= deadline:
+            return False, last_status
+        time.sleep(max(1, interval_seconds))
 
 
 def _submit_protocol_form(session, response, email, password):
@@ -787,6 +912,9 @@ def _try_get_access_token_protocol(page, email, password=None, attempt=1):
 
             if _is_redirect_navigation(response.url, settings["redirect_url"]) and _url_has_auth_code(response.url):
                 return _exchange_auth_code(settings, _extract_auth_code(response.url))
+            if _is_redirect_navigation(response.url, settings["redirect_url"]) and _url_has_auth_error(response.url):
+                print(f"[OAuth2:Protocol] - redirect auth error {_extract_auth_error(response.url)}", flush=True)
+                return False, False, False
 
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("Location", "")
@@ -794,6 +922,9 @@ def _try_get_access_token_protocol(page, email, password=None, attempt=1):
                 if _is_redirect_navigation(next_url, settings["redirect_url"]) and _url_has_auth_code(next_url):
                     print("[OAuth2:Protocol] - captured code from redirect", flush=True)
                     return _exchange_auth_code(settings, _extract_auth_code(next_url))
+                if _is_redirect_navigation(next_url, settings["redirect_url"]) and _url_has_auth_error(next_url):
+                    print(f"[OAuth2:Protocol] - redirect auth error {_extract_auth_error(next_url)}", flush=True)
+                    return False, False, False
                 url = next_url
                 continue
 
@@ -808,12 +939,18 @@ def _try_get_access_token_protocol(page, email, password=None, attempt=1):
             response = submitted
             if _is_redirect_navigation(response.url, settings["redirect_url"]) and _url_has_auth_code(response.url):
                 return _exchange_auth_code(settings, _extract_auth_code(response.url))
+            if _is_redirect_navigation(response.url, settings["redirect_url"]) and _url_has_auth_error(response.url):
+                print(f"[OAuth2:Protocol] - form auth error {_extract_auth_error(response.url)}", flush=True)
+                return False, False, False
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("Location", "")
                 url = urljoin(response.url, location)
                 if _is_redirect_navigation(url, settings["redirect_url"]) and _url_has_auth_code(url):
                     print("[OAuth2:Protocol] - captured code from form redirect", flush=True)
                     return _exchange_auth_code(settings, _extract_auth_code(url))
+                if _is_redirect_navigation(url, settings["redirect_url"]) and _url_has_auth_error(url):
+                    print(f"[OAuth2:Protocol] - form auth error {_extract_auth_error(url)}", flush=True)
+                    return False, False, False
                 continue
             url = response.url
             pending_response = response
