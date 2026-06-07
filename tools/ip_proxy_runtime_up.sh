@@ -2,21 +2,14 @@
 set -euo pipefail
 
 ROOT="${IPPOXY_ROOT:-/home/daytona/IPPOXY}"
-XRAY_BIN="${XRAY_BIN:-/home/daytona/ip-proxy-poc/bin/xray}"
 RUNTIME="${IP_PROXY_RUNTIME_DIR:-$ROOT/.runtime/ip-proxy}"
 LOG_DIR="${RUNTIME}/logs"
 CONF_DIR="${RUNTIME}/conf"
 XRAY_CONF="${CONF_DIR}/xray_turn_pool_25.generated.json"
-XRAY_LOG="${LOG_DIR}/xray-turn-pool-25.log"
 XRAY_PID="${RUNTIME}/xray-turn-pool-25.pid"
 
 mkdir -p "$LOG_DIR" "$CONF_DIR" "$ROOT/.runtime/resin/cache" "$ROOT/.runtime/resin/state" "$ROOT/.runtime/resin/log"
 cp "$ROOT/docs/ip-proxy/resin/xray_turn_pool_25.generated.json" "$XRAY_CONF"
-
-if [ ! -x "$XRAY_BIN" ]; then
-  echo "missing executable xray: $XRAY_BIN" >&2
-  exit 1
-fi
 
 stop_pid_file() {
   if [ -f "$XRAY_PID" ]; then
@@ -57,6 +50,10 @@ stop_pid_file
 if [ -x /home/daytona/ip-proxy-poc/rotate/stop_turn_pool.sh ]; then
   bash /home/daytona/ip-proxy-poc/rotate/stop_turn_pool.sh || true
 fi
+
+cd "$ROOT"
+docker compose -f docker-compose.ipproxy.yml rm -sf xray-turn-pool >/dev/null 2>&1 || true
+
 for port in $(seq 19080 19104); do
   stop_port_owner "$port"
 done
@@ -65,9 +62,9 @@ for port in $(seq 19080 19104); do
   wait_port_free "$port"
 done
 
-"$XRAY_BIN" run -test -config "$XRAY_CONF"
-nohup "$XRAY_BIN" run -config "$XRAY_CONF" > "$XRAY_LOG" 2>&1 &
-echo "$!" > "$XRAY_PID"
+docker compose -f docker-compose.ipproxy.yml pull xray-turn-pool resin
+docker compose -f docker-compose.ipproxy.yml run --rm --no-deps xray-turn-pool run -test -config /usr/local/etc/xray/config.json
+docker compose -f docker-compose.ipproxy.yml up -d xray-turn-pool resin
 
 for port in 19080 19104; do
   for _ in $(seq 1 40); do
@@ -79,17 +76,14 @@ for port in 19080 19104; do
   ss -ltnp | grep ":${port} " >/dev/null
 done
 
-cd "$ROOT"
-docker compose -f docker-compose.ipproxy.yml pull resin
-docker compose -f docker-compose.ipproxy.yml up -d resin
-
 for _ in $(seq 1 60); do
   if curl -fsS http://127.0.0.1:2260/healthz >/dev/null; then
-    echo "runtime=ok xray_pid=$(cat "$XRAY_PID") resin=healthy"
+    echo "runtime=ok xray=container resin=healthy"
     exit 0
   fi
   sleep 1
 done
 
+docker logs ippoxy-xray-turn-pool --tail 80 >&2 || true
 docker logs ippoxy-resin --tail 80 >&2 || true
 exit 1
