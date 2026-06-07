@@ -46,9 +46,12 @@ def main() -> None:
         resin_tests.append({"identity": identity, "got": got, "ok": ok})
 
     health = {}
+    admin_token = os.environ.get("RESIN_ADMIN_TOKEN", "daytona-admin")
     for path in ("/healthz", "/api/v1/nodes?limit=200", "/api/v1/platforms?limit=200"):
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:2260{path}", timeout=5) as resp:
+            headers = {"Authorization": f"Bearer {admin_token}"} if path.startswith("/api/") else {}
+            req = urllib.request.Request(f"http://127.0.0.1:2260{path}", headers=headers)
+            with urllib.request.urlopen(req, timeout=5) as resp:
                 health[path] = {"status": resp.status, "bytes": len(resp.read())}
         except Exception as exc:
             health[path] = {"error": str(exc)}

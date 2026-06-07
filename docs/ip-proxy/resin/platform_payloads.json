@@ -16,7 +16,7 @@
       "name": "IPPOXY_RES",
       "sticky_ttl": "24h",
       "regex_filters": [
-        "^ippoxy-res-"
+        "ippoxy-res-"
       ],
       "region_filters": [],
       "allocation_policy": "PREFER_IDLE_IP",
@@ -27,7 +27,7 @@
       "name": "IPPOXY_STATIC",
       "sticky_ttl": "12h",
       "regex_filters": [
-        "^ippoxy-static-"
+        "ippoxy-static-"
       ],
       "region_filters": [],
       "allocation_policy": "PREFER_LOW_LATENCY",
@@ -38,7 +38,7 @@
       "name": "IPPOXY_ALL",
       "sticky_ttl": "24h",
       "regex_filters": [
-        "^ippoxy-"
+        "ippoxy-"
       ],
       "region_filters": [],
       "allocation_policy": "PREFER_IDLE_IP",
