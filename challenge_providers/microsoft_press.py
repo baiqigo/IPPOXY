@@ -13,15 +13,29 @@ class MicrosoftPressProvider(ChallengeProvider):
         try:
             if page.get_by_text("一些异常活动").count() > 0:
                 return False
-            if page.get_by_text("取消").count() > 0:
-                return True
         except Exception:
             pass
         try:
-            if challenge_frame.locator(".draw").count() == 0:
-                return True
+            title = page.title()
+            if "不是机器人" in title or "robot" in title.lower():
+                return False
         except Exception:
             pass
+        try:
+            if page.locator('iframe[title="验证质询"]').count() > 0:
+                return False
+        except Exception:
+            pass
+        try:
+            frame_urls = [frame.url for frame in page.frames]
+            if any("hsprotect.net" in url or "fpt.live.com" in url for url in frame_urls):
+                return False
+        except Exception:
+            pass
+        try:
+            return challenge_frame.locator(".draw").count() == 0
+        except Exception:
+            return True
         return False
 
     def _rate_limited(self, page):
