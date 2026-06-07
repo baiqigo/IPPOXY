@@ -32,6 +32,51 @@ def get_oauth_proxy(data=None):
         print(f"[OAuth2:Protocol] - SOCKS proxy unsupported by requests without extra deps: {proxy}", flush=True)
     return get_proxy()
 
+
+def _summarize_credential_data(data):
+    if not isinstance(data, dict):
+        return {"body_type": type(data).__name__}
+    credentials = data.get("Credentials") if isinstance(data.get("Credentials"), dict) else {}
+    proofs = credentials.get("OtcLoginEligibleProofs")
+    summary = {
+        "if_exists": data.get("IfExistsResult"),
+        "has_password": credentials.get("HasPassword"),
+        "has_phone": credentials.get("HasPhone"),
+        "has_remote_ngc": credentials.get("HasRemoteNGC"),
+        "pref_credential": credentials.get("PrefCredential"),
+        "full_password_reset": data.get("FullPasswordResetExperience"),
+    }
+    if isinstance(proofs, list):
+        summary["otc_proof_count"] = len(proofs)
+        summary["otc_proof_types"] = [proof.get("type") for proof in proofs[:5] if isinstance(proof, dict)]
+    if "raw" in data:
+        summary["raw_len"] = len(str(data.get("raw") or ""))
+    return summary
+
+
+def _summarize_credential_status(status):
+    if not isinstance(status, dict):
+        return {"status_type": type(status).__name__}
+    keep = {
+        key: status.get(key)
+        for key in ("ok", "ready", "status", "if_exists", "has_password", "reason", "has_code")
+        if key in status
+    }
+    if "body" in status:
+        keep["body_summary"] = _summarize_credential_data(status.get("body"))
+    elif "body_summary" in status:
+        keep["body_summary"] = status.get("body_summary")
+    if "url" in status:
+        parsed = urlparse(str(status.get("url") or ""))
+        keep["url"] = f"{parsed.netloc}{parsed.path}"
+    return keep
+
+
+def _is_security_recovery_url(url):
+    parsed = urlparse(str(url or ""))
+    return parsed.netloc.lower() == "account.live.com" and parsed.path.lower().startswith("/recover")
+
+
 def generate_code_verifier(length=128):
     alphabet = string.ascii_letters + string.digits + '-._~'
     return ''.join(secrets.choice(alphabet) for _ in range(length))
@@ -701,15 +746,15 @@ def _submit_msa_config_login(session, response, email, password):
                 allow_redirects=False,
                 timeout=30,
             )
-            print(
-                f"[OAuth2:Protocol] - GetCredentialType status={credential_response.status_code} "
-                f"body={credential_response.text[:180]}",
-                flush=True,
-            )
             try:
                 credential_data = credential_response.json()
             except Exception:
                 credential_data = {}
+            print(
+                f"[OAuth2:Protocol] - GetCredentialType status={credential_response.status_code} "
+                f"summary={_summarize_credential_data(credential_data)}",
+                flush=True,
+            )
             credentials = credential_data.get("Credentials") if isinstance(credential_data, dict) else {}
             if isinstance(credential_data, dict) and credential_data.get("IfExistsResult") == 1:
                 print("[OAuth2:Protocol] - account not visible to MSA login yet", flush=True)
@@ -827,7 +872,7 @@ def _fetch_msa_credential_status(page, email):
             "status": credential_response.status_code,
             "if_exists": data.get("IfExistsResult") if isinstance(data, dict) else None,
             "has_password": credentials.get("HasPassword") if isinstance(credentials, dict) else None,
-            "body": data,
+            "body_summary": _summarize_credential_data(data),
         }
     except Exception as e:
         return {"ok": False, "reason": repr(e)}
@@ -845,7 +890,7 @@ def wait_msa_login_ready(page, email, max_wait_seconds=None, interval_seconds=No
     while True:
         attempt += 1
         last_status = _fetch_msa_credential_status(page, email)
-        print(f"[AccountReady] - attempt={attempt} status={last_status}", flush=True)
+        print(f"[AccountReady] - attempt={attempt} status={_summarize_credential_status(last_status)}", flush=True)
         if last_status.get("ready"):
             return True, last_status
         if time.time() >= deadline:
@@ -928,6 +973,9 @@ def _try_get_access_token_protocol(page, email, password=None, attempt=1):
             if _is_redirect_navigation(response.url, settings["redirect_url"]) and _url_has_auth_error(response.url):
                 print(f"[OAuth2:Protocol] - redirect auth error {_extract_auth_error(response.url)}", flush=True)
                 return False, False, False
+            if _is_security_recovery_url(response.url):
+                print("[OAuth2:Protocol] - security recovery required; stopping protocol login", flush=True)
+                return False, False, False
 
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("Location", "")
@@ -955,6 +1003,9 @@ def _try_get_access_token_protocol(page, email, password=None, attempt=1):
             if _is_redirect_navigation(response.url, settings["redirect_url"]) and _url_has_auth_error(response.url):
                 print(f"[OAuth2:Protocol] - form auth error {_extract_auth_error(response.url)}", flush=True)
                 return False, False, False
+            if _is_security_recovery_url(response.url):
+                print("[OAuth2:Protocol] - security recovery required after form submit; stopping protocol login", flush=True)
+                return False, False, False
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("Location", "")
                 url = urljoin(response.url, location)
@@ -963,6 +1014,9 @@ def _try_get_access_token_protocol(page, email, password=None, attempt=1):
                     return _exchange_auth_code(settings, _extract_auth_code(url))
                 if _is_redirect_navigation(url, settings["redirect_url"]) and _url_has_auth_error(url):
                     print(f"[OAuth2:Protocol] - form auth error {_extract_auth_error(url)}", flush=True)
+                    return False, False, False
+                if _is_security_recovery_url(url):
+                    print("[OAuth2:Protocol] - security recovery redirect required; stopping protocol login", flush=True)
                     return False, False, False
                 continue
             url = response.url
