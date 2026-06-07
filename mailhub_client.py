@@ -50,7 +50,11 @@ def import_outlook_account(email, password, client_id, refresh_token):
 
     try:
         with request.urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            response_body = resp.read().decode("utf-8", errors="replace")
+            try:
+                data = json.loads(response_body) if response_body else {}
+            except json.JSONDecodeError:
+                data = {"raw": response_body[:500]}
             return {"enabled": True, "ok": 200 <= resp.status < 300, "status": resp.status, "data": data}
     except HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace")

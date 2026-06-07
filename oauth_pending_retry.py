@@ -80,7 +80,13 @@ def retry_one(item, wait_seconds, poll_seconds):
 
     refresh_token, access_token, expire_at = get_access_token(None, email, password=password, max_retries=1)
     if not refresh_token:
-        return {"email": email, "ok": False, "stage": "oauth_token", "status": status}
+        return {
+            "email": email,
+            "ok": False,
+            "stage": "oauth_token",
+            "status": status,
+            "oauth_method": os.environ.get("OUTLOOK_OAUTH_METHOD", "protocol"),
+        }
 
     with open(ROOT / "config.json", "r", encoding="utf-8") as f:
         config = json.load(f)
@@ -106,14 +112,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--include-logged", action="store_true")
     parser.add_argument("--email", default="", help="Retry only one full email address.")
+    parser.add_argument("--password", default="", help="Use with --email to retry an account that is not in Results files.")
     parser.add_argument("--skip-imported", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--limit", type=int, default=20)
-    parser.add_argument("--wait-seconds", type=int, default=int(os.environ.get("OUTLOOK_PENDING_READY_WAIT_SECONDS", "30")))
+    parser.add_argument("--wait-seconds", type=int, default=int(os.environ.get("OUTLOOK_PENDING_READY_WAIT_SECONDS", "120")))
     parser.add_argument("--poll-seconds", type=int, default=int(os.environ.get("OUTLOOK_PENDING_READY_POLL_SECONDS", "10")))
     args = parser.parse_args()
 
     candidates = load_candidates(include_logged=args.include_logged)
-    if args.email:
+    if args.email and args.password:
+        candidates = [{"email": args.email.strip(), "password": args.password.strip(), "source": "cli"}]
+    elif args.email:
         wanted = args.email.strip().lower()
         candidates = [item for item in candidates if item["email"].lower() == wanted]
     if args.skip_imported:
