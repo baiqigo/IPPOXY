@@ -34,6 +34,35 @@ def _click_if_visible(locator, timeout=3000):
     return False
 
 
+def _fill_first_visible(page, selectors, value, timeout=3000):
+    for selector in selectors:
+        try:
+            locator = page.locator(selector)
+            if locator.count() > 0:
+                locator.first.fill(value, timeout=timeout)
+                return selector
+        except Exception:
+            pass
+    return ""
+
+
+def _log_oauth_controls(page):
+    try:
+        controls = page.locator("input, button").evaluate_all(
+            """els => els.slice(0, 20).map(el => ({
+                tag: el.tagName,
+                type: el.getAttribute('type'),
+                name: el.getAttribute('name'),
+                id: el.getAttribute('id'),
+                aria: el.getAttribute('aria-label'),
+                text: (el.innerText || el.value || '').slice(0, 80)
+            }))"""
+        )
+        print(f"[OAuth2] - visible controls snapshot: {controls}", flush=True)
+    except Exception as e:
+        print(f"[OAuth2] - controls snapshot failed: {e}", flush=True)
+
+
 def handle_oauth2_form(page, email, password=None):
     filled_login = False
     filled_password = False
@@ -41,24 +70,36 @@ def handle_oauth2_form(page, email, password=None):
 
     for _ in range(40):
         try:
-            login = page.locator('[name="loginfmt"]')
-            if not filled_login and login.count() > 0:
-                login.first.fill(email, timeout=3000)
-                _click_if_visible(page.locator('#idSIButton9'), timeout=3000)
-                filled_login = True
-                page.wait_for_timeout(700)
+            if not filled_login:
+                login_selector = _fill_first_visible(
+                    page,
+                    ['[name="loginfmt"]', '#i0116', 'input[type="email"]'],
+                    email,
+                    timeout=3000,
+                )
+                if login_selector:
+                    print(f"[OAuth2] - filled login via {login_selector}", flush=True)
+                    _click_if_visible(page.locator('#idSIButton9, input[type="submit"], button[type="submit"]'), timeout=3000)
+                    filled_login = True
+                    page.wait_for_timeout(700)
 
-            password_box = page.locator('[name="passwd"], input[type="password"]')
-            if password and not filled_password and password_box.count() > 0:
-                password_box.first.fill(password, timeout=20000)
-                _click_if_visible(page.locator('#idSIButton9'), timeout=5000)
-                filled_password = True
-                page.wait_for_timeout(1000)
+            if password and not filled_password:
+                password_selector = _fill_first_visible(
+                    page,
+                    ['[name="passwd"]', '#i0118', 'input[type="password"]'],
+                    password,
+                    timeout=3000,
+                )
+                if password_selector:
+                    print(f"[OAuth2] - filled password via {password_selector}", flush=True)
+                    _click_if_visible(page.locator('#idSIButton9, input[type="submit"], button[type="submit"]'), timeout=5000)
+                    filled_password = True
+                    page.wait_for_timeout(1000)
 
             if _click_if_visible(page.locator('[data-testid="appConsentPrimaryButton"]'), timeout=2000):
                 consent_clicked = True
 
-            _click_if_visible(page.locator('#idSIButton9'), timeout=1000)
+            _click_if_visible(page.locator('#idSIButton9, input[type="submit"], button[type="submit"]'), timeout=1000)
 
             if consent_clicked:
                 return
@@ -137,6 +178,7 @@ def _try_get_access_token(page, email, password=None, attempt=1):
             return False, False, False
 
         handle_oauth2_form(page, f"{email}{_email_suffix}", password=password)
+        _log_oauth_controls(page)
 
         max_refreshes = 1
         refresh_count = 0
