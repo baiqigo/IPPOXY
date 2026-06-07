@@ -9,12 +9,25 @@ def format_outlook_import_line(email, password, client_id, refresh_token):
     return f"{email}----{password}----{client_id}----{refresh_token}"
 
 
+def get_mailhub_bearer_token():
+    for name in (
+        "MAIL_HUB_API_SECRET",
+        "MAILPILOT_TOKEN",
+        "MAILPILOT_API_KEY",
+        "MAILPILOT_API_SECRET",
+    ):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
 def import_outlook_account(email, password, client_id, refresh_token):
     base_url = os.environ.get("MAIL_HUB_URL", "").strip().rstrip("/")
     if not base_url:
         return {"enabled": False}
 
-    api_secret = os.environ.get("MAIL_HUB_API_SECRET", "").strip()
+    api_secret = get_mailhub_bearer_token()
     account_type = os.environ.get("MAIL_HUB_OUTLOOK_TYPE", "long").strip() or "long"
     group = os.environ.get("MAIL_HUB_OUTLOOK_GROUP", "IPPOXY").strip() or "IPPOXY"
 
