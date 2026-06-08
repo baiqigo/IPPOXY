@@ -54,6 +54,25 @@ class MicrosoftPressProvider(ChallengeProvider):
                 return label, locator, count
         return "", None, 0
 
+    def _fresh_frame_meta(self, controller, page, challenge_frame, frame_meta):
+        fresh_meta = None
+        try:
+            fresh_meta = controller._iframe_meta_for_frame(page, challenge_frame)
+        except Exception as e:
+            print(f"[ChallengeRouter] - frame meta refresh failed: {e}", flush=True)
+        if not fresh_meta:
+            return frame_meta
+        merged = dict(frame_meta or {})
+        merged.update(fresh_meta)
+        old_box = (frame_meta or {}).get("box") or {}
+        new_box = fresh_meta.get("box") or {}
+        if old_box != new_box:
+            print(
+                f"[ChallengeRouter] - refreshed frame box old={old_box} new={new_box}",
+                flush=True,
+            )
+        return merged
+
     def _hold_button_locators(self, challenge_frame):
         hold_words = re.compile(r"(按住|再次按下|长按|hold|press)", re.I)
         return [
@@ -117,6 +136,7 @@ class MicrosoftPressProvider(ChallengeProvider):
 
         for attempt in range(0, controller.max_captcha_retries + 1):
             page.wait_for_timeout(200)
+            frame_meta = self._fresh_frame_meta(controller, page, challenge_frame, frame_meta)
             print(
                 f"[ChallengeRouter] - {self.name} attempt "
                 f"{attempt + 1}/{controller.max_captcha_retries + 1}",
@@ -143,9 +163,11 @@ class MicrosoftPressProvider(ChallengeProvider):
                     controller._hold_locator_or_box(page, hold_locator, "press_again", frame_meta)
                 else:
                     print("[ChallengeRouter] - no hold locator after accessibility; visual long-press", flush=True)
+                    frame_meta = self._fresh_frame_meta(controller, page, challenge_frame, frame_meta)
                     controller._visual_challenge_press(page, frame_meta, "press_again")
             else:
                 print("[ChallengeRouter] - no DOM buttons found; visual long-press on hold button", flush=True)
+                frame_meta = self._fresh_frame_meta(controller, page, challenge_frame, frame_meta)
                 controller._visual_challenge_press(page, frame_meta, "press_again")
 
             wait_result = self._wait_after_press(page, controller, challenge_frame, attempt, "mouse")
@@ -168,6 +190,7 @@ class MicrosoftPressProvider(ChallengeProvider):
 
             if accessibility_count == 0 and hold_count == 0:
                 print("[ChallengeRouter] - mouse press did not clear; trying keyboard hold fallback", flush=True)
+                frame_meta = self._fresh_frame_meta(controller, page, challenge_frame, frame_meta)
                 controller._keyboard_challenge_press(page, frame_meta)
                 wait_result = self._wait_after_press(page, controller, challenge_frame, attempt, "keyboard")
                 if wait_result == "cleared":
