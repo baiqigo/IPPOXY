@@ -434,7 +434,7 @@ print("ok")
 
 def check_batch_verifier_diagnosis() -> dict:
     script = r"""
-from tools.ippoxy_sandbox_batch_verify import batch_diagnosis
+from tools.ippoxy_sandbox_batch_verify import batch_diagnosis, mailhub_stats_delta
 
 ip_only = batch_diagnosis(
     {"failure_reasons": {"entry_failed": 2, "rate_or_abnormal_after_profile": 1}},
@@ -470,6 +470,16 @@ fallback = batch_diagnosis(
 )
 assert fallback["status"] == "program_failure_present", fallback
 assert fallback["logged_email_delta"] == 1, fallback
+mailhub_progress = batch_diagnosis(
+    {},
+    {},
+    {"logged_email": 0, "outlook_token": 0},
+    {"total": 1, "available": 1},
+)
+assert mailhub_progress["status"] == "success_progress", mailhub_progress
+assert mailhub_progress["mailhub_total_delta"] == 1, mailhub_progress
+assert mailhub_progress["fresh_token_or_mailhub_progress"] is True, mailhub_progress
+assert mailhub_stats_delta({"total": 276, "validToken": 220}, {"total": 277, "validToken": 221}) == {"total": 1, "validToken": 1}
 print("ok")
 """
     return run([sys.executable, "-c", script])

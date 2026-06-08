@@ -13,6 +13,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from mailhub_client import get_outlook_stats
 RESULT_FILES = {
     "logged_email": ROOT / "Results/logged_email.txt",
     "oauth_pending": ROOT / "Results/oauth_pending.txt",
@@ -31,6 +35,73 @@ PROGRAM_FAILURE_REASONS = {
     "mailhub_import_failed",
     "oauth_pending_not_ready",
 }
+MAILHUB_ENV_KEYS = (
+    "MAIL_HUB_URL",
+    "MAIL_HUB_API_SECRET",
+    "MAILPILOT_TOKEN",
+    "MAILPILOT_API_KEY",
+    "MAILPILOT_API_SECRET",
+)
+MAILHUB_STAT_KEYS = (
+    "total",
+    "available",
+    "assigned",
+    "validToken",
+    "invalidToken",
+    "pendingOAuth",
+    "noToken",
+)
+
+
+def load_env_defaults(path: Path = ROOT / ".env") -> dict:
+    if not path.exists():
+        return {"path": str(path), "loaded": False}
+    loaded = []
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key not in MAILHUB_ENV_KEYS or os.environ.get(key):
+            continue
+        value = value.strip().strip('"').strip("'")
+        os.environ[key] = value
+        loaded.append(key)
+    return {"path": str(path), "loaded": bool(loaded), "keys": loaded}
+
+
+def summarize_mailhub_stats(result: object) -> dict:
+    if not isinstance(result, dict):
+        return {}
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return {}
+    return {key: data.get(key) for key in MAILHUB_STAT_KEYS if key in data}
+
+
+def public_mailhub_result(result: object) -> dict:
+    if not isinstance(result, dict):
+        return {"ok": False, "error": "invalid_result"}
+    output = {
+        "enabled": result.get("enabled"),
+        "ok": result.get("ok"),
+        "status": result.get("status"),
+        "counts": summarize_mailhub_stats(result),
+    }
+    if result.get("error"):
+        output["error"] = str(result.get("error"))[:300]
+    return output
+
+
+def mailhub_stats_delta(before: dict, after: dict) -> dict:
+    delta = {}
+    for key in sorted(set(before) | set(after)):
+        try:
+            delta[key] = int(after.get(key) or 0) - int(before.get(key) or 0)
+        except (TypeError, ValueError):
+            delta[key] = None
+    return delta
 
 
 def line_count(path: Path) -> int:
@@ -140,7 +211,12 @@ def _failure_reasons(result_detail: object, flow_stats: object) -> dict[str, int
     return {}
 
 
-def batch_diagnosis(result_detail: object, flow_stats: object, count_delta: dict) -> dict:
+def batch_diagnosis(
+    result_detail: object,
+    flow_stats: object,
+    count_delta: dict,
+    mailhub_delta: dict | None = None,
+) -> dict:
     reasons = _failure_reasons(result_detail, flow_stats)
     challenge_reasons = {key: value for key, value in reasons.items() if key.startswith("challenge_failed_")}
     ip_reasons = {key: value for key, value in reasons.items() if key in IP_FAILURE_REASONS}
@@ -164,7 +240,8 @@ def batch_diagnosis(result_detail: object, flow_stats: object, count_delta: dict
 
     token_delta = _as_int(count_delta.get("outlook_token")) if isinstance(count_delta, dict) else 0
     logged_delta = _as_int(count_delta.get("logged_email")) if isinstance(count_delta, dict) else 0
-    status = "success_progress" if token_delta > 0 else "no_token_progress"
+    mailhub_total_delta = _as_int(mailhub_delta.get("total")) if isinstance(mailhub_delta, dict) else 0
+    status = "success_progress" if token_delta > 0 or mailhub_total_delta > 0 else "no_token_progress"
     if program_reasons:
         status = "program_failure_present"
     elif dominant_lane == "ip_entry":
@@ -184,9 +261,11 @@ def batch_diagnosis(result_detail: object, flow_stats: object, count_delta: dict
         "other_reasons": other_reasons,
         "token_delta": token_delta,
         "logged_email_delta": logged_delta,
+        "mailhub_total_delta": mailhub_total_delta,
         "needs_program_fix": bool(program_reasons),
         "needs_ip_refresh": bool(ip_reasons) and lane_counts["ip_entry"] >= lane_counts["challenge"],
         "needs_challenge_evidence_or_manual_fallback": bool(challenge_reasons),
+        "fresh_token_or_mailhub_progress": token_delta > 0 or mailhub_total_delta > 0,
     }
 
 
@@ -254,13 +333,19 @@ def main() -> int:
         )
         return 0
 
+    mailhub_env = load_env_defaults()
     before = result_counts()
+    mailhub_before_result = get_outlook_stats()
+    mailhub_before = summarize_mailhub_stats(mailhub_before_result)
     steps = []
     for cmd in commands:
         step_log = log_path if cmd == batch_cmd else captures / f"outlook_batch_verify_{args.run_id}_{Path(cmd[0]).name}.log"
         steps.append(run(cmd, env=env, log_path=step_log, check=cmd != batch_cmd))
 
     after = result_counts()
+    mailhub_after_result = get_outlook_stats()
+    mailhub_after = summarize_mailhub_stats(mailhub_after_result)
+    mailhub_delta = mailhub_stats_delta(mailhub_before, mailhub_after)
     source_quality = load_json(SOURCE_QUALITY_JSON)
     flow_stats = load_json(captures / "outlook_flow_stats_latest.json")
     count_delta = {key: after.get(key, 0) - before.get(key, 0) for key in sorted(set(before) | set(after))}
@@ -274,6 +359,10 @@ def main() -> int:
         "counts_before": before,
         "counts_after": after,
         "count_delta": count_delta,
+        "mailhub_env": mailhub_env,
+        "mailhub_stats_before": public_mailhub_result(mailhub_before_result),
+        "mailhub_stats_after": public_mailhub_result(mailhub_after_result),
+        "mailhub_stats_delta": mailhub_delta,
         "steps": steps,
         "result_detail": result_detail,
         "flow_stats": flow_stats,
@@ -281,7 +370,7 @@ def main() -> int:
         "pool_refresh": load_json(captures / "ip_pool_refresh_latest.json"),
         "source_quality": source_quality,
         "source_quality_summary": compact_source_quality(source_quality),
-        "batch_diagnosis": batch_diagnosis(result_detail, flow_stats, count_delta),
+        "batch_diagnosis": batch_diagnosis(result_detail, flow_stats, count_delta, mailhub_delta),
         "artifacts": {
             "flow_stats": file_artifact(captures / "outlook_flow_stats_latest.json"),
             "registrar_feedback": file_artifact(captures / "ip_registrar_feedback_latest.json"),
