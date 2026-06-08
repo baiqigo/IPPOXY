@@ -354,14 +354,18 @@ rows = [
     {"source": "source_a", "kind": "turn", "success": True, "clean": True, "exit_ip": "10.0.0.1"},
     {"source": "source_a", "kind": "turn", "success": True, "clean": False, "exit_ip": "10.0.0.2", "dirty": ["is_proxy"]},
     {"source": "source_b", "kind": "socks5", "success": False, "clean": False, "error": "timeout"},
+    {"source": "source_b", "kind": "turn", "success": False, "clean": False, "error": "timeout"},
+    {"source": "source_b", "kind": "turn", "success": False, "clean": False, "error": "timeout"},
 ]
-summary = summarize_source_quality(rows)
-assert summary["total"] == 3, summary
+summary = summarize_source_quality(rows, cooldown_min_total=2, cooldown_max_clean_rate=1.0, cooldown_max_success_rate=25.0)
+assert summary["total"] == 5, summary
 assert summary["clean"] == 1, summary
 assert summary["by_source"]["source_a"]["total"] == 2, summary
 assert summary["by_source"]["source_a"]["clean"] == 1, summary
 assert summary["by_source"]["source_a"]["dirty_reasons"]["is_proxy"] == 1, summary
-assert summary["by_source"]["source_b"]["errors"]["timeout"] == 1, summary
+assert summary["by_source"]["source_b"]["errors"]["timeout"] == 3, summary
+assert summary["by_source"]["source_b"]["cooldown_recommended"] is True, summary
+assert summary["cooldown_sources"]["source_b"]["reason"] == "no_clean_candidates", summary
 assert summary["top_sources_by_clean"][0] == "source_a", summary
 print("ok")
 """
@@ -434,16 +438,18 @@ from tools.ip_proxy_candidate_harvest import prioritize_candidates, select_check
 candidates = [
     {"source": "weak_turn", "kind": "turn", "raw": "turn://aaa"},
     {"source": "strong_turn", "kind": "turn", "raw": "turn://zzz"},
+    {"source": "cooldown_turn", "kind": "turn", "raw": "turn://cool"},
     {"source": "strong_socks", "kind": "socks5", "raw": "socks5://127.0.0.1:1080"},
 ]
 source_quality = {
     "weak_turn": {"clean": 1, "clean_rate_pct": 1.0, "success": 2, "success_rate_pct": 2.0},
     "strong_turn": {"clean": 100, "clean_rate_pct": 50.0, "success": 150, "success_rate_pct": 75.0},
+    "cooldown_turn": {"clean": 1000, "clean_rate_pct": 90.0, "success": 1000, "success_rate_pct": 99.0, "cooldown_recommended": True},
     "strong_socks": {"clean": 999, "clean_rate_pct": 99.0, "success": 999, "success_rate_pct": 99.0},
 }
 prioritized = prioritize_candidates(candidates, source_quality)
-assert [item["source"] for item in prioritized] == ["strong_turn", "weak_turn", "strong_socks"], prioritized
-assert [item["source"] for item in prioritize_candidates(candidates, {})] == ["weak_turn", "strong_turn", "strong_socks"], candidates
+assert [item["source"] for item in prioritized] == ["strong_turn", "weak_turn", "cooldown_turn", "strong_socks"], prioritized
+assert [item["source"] for item in prioritize_candidates(candidates, {})] == ["weak_turn", "cooldown_turn", "strong_turn", "strong_socks"], candidates
 
 many = [
     {"source": "source_a", "kind": "turn", "raw": f"turn://a{i}"}

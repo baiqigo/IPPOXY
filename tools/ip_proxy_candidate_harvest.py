@@ -289,6 +289,7 @@ def candidate_sort_key(item: dict, source_quality: dict[str, dict] | None = None
     quality = (source_quality or {}).get(str(item.get("source") or "unknown"), {})
     return (
         kind_priority(item),
+        1 if quality.get("cooldown_recommended") else 0,
         -safe_int(quality.get("clean")),
         -safe_float(quality.get("clean_rate_pct")),
         -safe_int(quality.get("success")),
