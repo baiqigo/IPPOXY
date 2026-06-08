@@ -378,6 +378,7 @@ def select_check_candidates(
     source_quality: dict[str, dict] | None = None,
     include_cooldown_sources: bool = False,
     max_per_kind: int = 0,
+    relax_source_cap: bool = False,
 ) -> list[dict]:
     active = [
         item
@@ -415,7 +416,7 @@ def select_check_candidates(
         per_source=per_source,
         per_kind=per_kind,
         limit=limit,
-        max_per_source=max_per_source,
+        max_per_source=0 if relax_source_cap else max_per_source,
         max_per_kind=max_per_kind,
     )
     return selected
@@ -434,6 +435,7 @@ def selection_summary(
     max_check: int = 0,
     max_per_source: int = 0,
     max_per_kind: int = 0,
+    relax_source_cap: bool = False,
 ) -> dict:
     selected_ids = {id(item) for item in selected}
     cooldown_candidates = [item for item in candidates if is_cooldown_source(item, source_quality)]
@@ -458,6 +460,7 @@ def selection_summary(
         "max_check": max_check,
         "max_check_per_source": max_per_source,
         "max_check_per_kind": max_per_kind,
+        "relax_source_cap": relax_source_cap,
         "include_cooldown_sources": include_cooldown_sources,
         "skipped_cooldown_candidates": 0
         if include_cooldown_sources
@@ -480,6 +483,7 @@ def write_selection_summary(
     max_check: int = 0,
     max_per_source: int = 0,
     max_per_kind: int = 0,
+    relax_source_cap: bool = False,
 ) -> dict:
     summary = selection_summary(
         candidates,
@@ -489,6 +493,7 @@ def write_selection_summary(
         max_check=max_check,
         max_per_source=max_per_source,
         max_per_kind=max_per_kind,
+        relax_source_cap=relax_source_cap,
     )
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     write_json(RUNTIME_DIR / f"proxy_candidate_selection_{run_id}.json", summary)
@@ -633,6 +638,11 @@ def main() -> int:
         action="store_true",
         help="also check sources previously marked cooldown_recommended by source quality",
     )
+    parser.add_argument(
+        "--relax-source-cap",
+        action="store_true",
+        help="allow the second fill pass to exceed --max-check-per-source when non-cooldown supply is sparse",
+    )
     parser.add_argument("--run-id", default="", help="stable run id for timestamped outputs")
     parser.add_argument("--source-quality", type=Path, default=DEFAULT_SOURCE_QUALITY)
     args = parser.parse_args()
@@ -655,6 +665,7 @@ def main() -> int:
             max_check=args.max_check,
             max_per_source=args.max_check_per_source,
             max_per_kind=args.max_check_per_kind,
+            relax_source_cap=args.relax_source_cap,
         )
         print(
             json.dumps(
@@ -677,6 +688,7 @@ def main() -> int:
         source_quality,
         args.include_cooldown_sources,
         args.max_check_per_kind,
+        args.relax_source_cap,
     )
     selection = write_selection_summary(
         pool_candidates,
@@ -687,6 +699,7 @@ def main() -> int:
         max_check=args.max_check,
         max_per_source=args.max_check_per_source,
         max_per_kind=args.max_check_per_kind,
+        relax_source_cap=args.relax_source_cap,
     )
     results: list[dict] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:

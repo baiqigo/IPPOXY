@@ -16,6 +16,7 @@ IP_RUNTIME_DIR = Path(os.environ.get("IP_PROXY_RUNTIME_DIR", ROOT / ".runtime/ip
 DEFAULT_INPUT = IP_RUNTIME_DIR / "research/proxy_candidate_check.latest.json"
 DEFAULT_JSON_OUT = IP_RUNTIME_DIR / "research/proxy_source_quality_latest.json"
 DEFAULT_MD_OUT = IP_RUNTIME_DIR / "research/proxy_source_quality_latest.md"
+DEFAULT_SELECTION_SUMMARY = IP_RUNTIME_DIR / "research/proxy_candidate_selection.latest.json"
 DEFAULT_COOLDOWN_MIN_TOTAL = int(os.environ.get("IP_PROXY_SOURCE_COOLDOWN_MIN_TOTAL", "20"))
 DEFAULT_COOLDOWN_MAX_CLEAN_RATE = float(os.environ.get("IP_PROXY_SOURCE_COOLDOWN_MAX_CLEAN_RATE", "1.0"))
 DEFAULT_COOLDOWN_MAX_SUCCESS_RATE = float(os.environ.get("IP_PROXY_SOURCE_COOLDOWN_MAX_SUCCESS_RATE", "25.0"))
@@ -23,6 +24,12 @@ DEFAULT_COOLDOWN_MAX_SUCCESS_RATE = float(os.environ.get("IP_PROXY_SOURCE_COOLDO
 
 def read_json(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def read_json_if_exists(path: Path) -> object:
+    if not path.exists():
+        return {}
+    return read_json(path)
 
 
 def write_json(path: Path, data: object) -> None:
@@ -152,6 +159,128 @@ def summarize_source_quality(
     }
 
 
+def refresh_summary_indexes(summary: dict) -> None:
+    by_source = summary.get("by_source") if isinstance(summary.get("by_source"), dict) else {}
+    ranked = sorted(
+        by_source.items(),
+        key=lambda item: (item[1].get("clean", 0), item[1].get("success", 0), -item[1].get("total", 0), item[0]),
+        reverse=True,
+    )
+    cooldown_sources = {
+        source: {
+            "reason": item.get("cooldown_reason"),
+            "total": item.get("total"),
+            "success_rate_pct": item.get("success_rate_pct"),
+            "clean_rate_pct": item.get("clean_rate_pct"),
+            "carried_forward": bool(item.get("carried_forward")),
+            "last_observed_ts": item.get("last_observed_ts"),
+        }
+        for source, item in sorted(by_source.items())
+        if isinstance(item, dict) and item.get("cooldown_recommended")
+    }
+    summary["source_count"] = len(by_source)
+    summary["top_sources_by_clean"] = [source for source, _ in ranked[:8]]
+    summary["cooldown_sources"] = cooldown_sources
+
+
+def merge_previous_cooldown_sources(summary: dict, previous: object) -> dict:
+    if not isinstance(previous, dict):
+        return summary
+    previous_by_source = previous.get("by_source")
+    if not isinstance(previous_by_source, dict):
+        return summary
+
+    by_source = summary.setdefault("by_source", {})
+    if not isinstance(by_source, dict):
+        by_source = {}
+        summary["by_source"] = by_source
+
+    carried: dict[str, dict] = {}
+    current_sources = set(by_source)
+    for source, item in sorted(previous_by_source.items()):
+        source = str(source)
+        if source in current_sources or not isinstance(item, dict):
+            continue
+        if not item.get("cooldown_recommended"):
+            continue
+        copied = dict(item)
+        copied["carried_forward"] = True
+        copied["not_checked_in_current_run"] = True
+        copied["last_observed_ts"] = previous.get("ts")
+        by_source[source] = copied
+        carried[source] = {
+            "reason": copied.get("cooldown_reason"),
+            "total": copied.get("total"),
+            "success_rate_pct": copied.get("success_rate_pct"),
+            "clean_rate_pct": copied.get("clean_rate_pct"),
+            "last_observed_ts": copied.get("last_observed_ts"),
+        }
+
+    summary["carried_forward_cooldown_sources"] = carried
+    summary["carried_forward_cooldown_source_count"] = len(carried)
+    refresh_summary_indexes(summary)
+    return summary
+
+
+def merge_selection_cooldown_sources(summary: dict, selection: object) -> dict:
+    if not isinstance(selection, dict):
+        return summary
+    selection_cooldown = selection.get("cooldown_sources")
+    if not isinstance(selection_cooldown, dict):
+        return summary
+
+    by_source = summary.setdefault("by_source", {})
+    if not isinstance(by_source, dict):
+        by_source = {}
+        summary["by_source"] = by_source
+
+    recovered: dict[str, dict] = {}
+    current_sources = set(by_source)
+    for source, item in sorted(selection_cooldown.items()):
+        source = str(source)
+        if source in current_sources or not isinstance(item, dict):
+            continue
+        reason = str(item.get("reason") or "selection_cooldown").strip()
+        total = int(item.get("total") or item.get("candidates") or 0)
+        success = int(item.get("success") or 0)
+        clean = int(item.get("clean") or 0)
+        success_rate = pct(success, total)
+        clean_rate = pct(clean, total)
+        by_source[source] = {
+            "total": total,
+            "success": success,
+            "clean": clean,
+            "success_rate_pct": success_rate,
+            "clean_rate_pct": clean_rate,
+            "unique_exit_ips": 0,
+            "unique_clean_exit_ips": 0,
+            "by_kind": {},
+            "clean_by_kind": {},
+            "dirty_reasons": {},
+            "errors": {},
+            "cooldown_recommended": True,
+            "cooldown_reason": reason,
+            "carried_forward": True,
+            "recovered_from_selection": True,
+            "not_checked_in_current_run": True,
+            "selection_candidates": item.get("candidates"),
+            "selection_selected": item.get("selected"),
+        }
+        recovered[source] = {
+            "reason": reason,
+            "total": total,
+            "success_rate_pct": success_rate,
+            "clean_rate_pct": clean_rate,
+            "selection_candidates": item.get("candidates"),
+            "selection_selected": item.get("selected"),
+        }
+
+    summary["recovered_selection_cooldown_sources"] = recovered
+    summary["recovered_selection_cooldown_source_count"] = len(recovered)
+    refresh_summary_indexes(summary)
+    return summary
+
+
 def render_markdown(summary: dict, input_path: Path) -> str:
     lines = [
         "# Proxy Source Quality",
@@ -162,9 +291,11 @@ def render_markdown(summary: dict, input_path: Path) -> str:
         f"- Clean: {summary.get('clean', 0)}",
         f"- Sources: {summary.get('source_count', 0)}",
         f"- Cooldown recommended: {len(summary.get('cooldown_sources') or {})}",
+        f"- Carried-forward cooldown sources: {summary.get('carried_forward_cooldown_source_count', 0)}",
+        f"- Recovered selection cooldown sources: {summary.get('recovered_selection_cooldown_source_count', 0)}",
         "",
-        "| Source | Total | Success | Clean | Clean % | Unique clean exits | Cooldown | Top errors / dirty reasons |",
-        "|---|---:|---:|---:|---:|---:|---|---|",
+        "| Source | Total | Success | Clean | Clean % | Unique clean exits | Cooldown | Carried | Top errors / dirty reasons |",
+        "|---|---:|---:|---:|---:|---:|---|---|---|",
     ]
 
     sources = summary.get("by_source", {})
@@ -183,7 +314,7 @@ def render_markdown(summary: dict, input_path: Path) -> str:
         lines.append(
             f"| `{source}` | {item.get('total', 0)} | {item.get('success', 0)} | {item.get('clean', 0)} | "
             f"{item.get('clean_rate_pct', 0)} | {item.get('unique_clean_exit_ips', 0)} | "
-            f"{item.get('cooldown_reason') or ''} | {reason_text} |"
+            f"{item.get('cooldown_reason') or ''} | {'yes' if item.get('carried_forward') else ''} | {reason_text} |"
         )
 
     return "\n".join(lines) + "\n"
@@ -197,8 +328,14 @@ def main() -> int:
     parser.add_argument("--cooldown-min-total", type=int, default=DEFAULT_COOLDOWN_MIN_TOTAL)
     parser.add_argument("--cooldown-max-clean-rate", type=float, default=DEFAULT_COOLDOWN_MAX_CLEAN_RATE)
     parser.add_argument("--cooldown-max-success-rate", type=float, default=DEFAULT_COOLDOWN_MAX_SUCCESS_RATE)
+    parser.add_argument("--previous-source-quality", type=Path, default=DEFAULT_JSON_OUT)
+    parser.add_argument("--no-merge-previous-source-quality", action="store_true")
+    parser.add_argument("--selection-summary", type=Path, default=DEFAULT_SELECTION_SUMMARY)
+    parser.add_argument("--no-merge-selection-summary", action="store_true")
     args = parser.parse_args()
 
+    previous = {} if args.no_merge_previous_source_quality else read_json_if_exists(args.previous_source_quality)
+    selection = {} if args.no_merge_selection_summary else read_json_if_exists(args.selection_summary)
     data = read_json(args.input)
     if not isinstance(data, list):
         raise SystemExit(f"input must be a JSON list: {args.input}")
@@ -209,10 +346,26 @@ def main() -> int:
         cooldown_max_clean_rate=args.cooldown_max_clean_rate,
         cooldown_max_success_rate=args.cooldown_max_success_rate,
     )
+    if previous:
+        summary = merge_previous_cooldown_sources(summary, previous)
+    if selection:
+        summary = merge_selection_cooldown_sources(summary, selection)
     write_json(args.json_out, summary)
     args.md_out.parent.mkdir(parents=True, exist_ok=True)
     args.md_out.write_text(render_markdown(summary, args.input), encoding="utf-8")
-    print(json.dumps({"input": str(args.input), "total": summary["total"], "clean": summary["clean"], "sources": summary["source_count"]}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "input": str(args.input),
+                "total": summary["total"],
+                "clean": summary["clean"],
+                "sources": summary["source_count"],
+                "carried_forward_cooldown_source_count": summary.get("carried_forward_cooldown_source_count", 0),
+                "recovered_selection_cooldown_source_count": summary.get("recovered_selection_cooldown_source_count", 0),
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 
