@@ -308,6 +308,10 @@ def main() -> int:
     report_path = captures / f"outlook_batch_verify_{args.run_id}.json"
     log_path = captures / f"outlook_batch_verify_{args.run_id}.log"
     flow_stats_dir = captures / f"outlook_flow_{args.run_id}"
+    flow_events_path = flow_stats_dir / "outlook_flow_events.jsonl"
+    registrar_feedback_path = captures / f"ip_registrar_feedback_{args.run_id}.json"
+    registrar_feedback_latest_path = captures / "ip_registrar_feedback_latest.json"
+    pool_refresh_latest_path = captures / "ip_pool_refresh_latest.json"
     env = os.environ.copy()
     env.update(
         {
@@ -341,8 +345,23 @@ def main() -> int:
         if shutil.which("xvfb-run") and os.environ.get("OUTLOOK_HEADLESS", "").strip().lower() not in ("1", "true", "yes"):
             batch_cmd = ["xvfb-run", "-a", *batch_cmd]
     commands.append(batch_cmd)
-    commands.append([sys.executable, "tools/ip_proxy_registrar_feedback.py"])
-    commands.append([sys.executable, "tools/ip_proxy_pool_refresh.py", "--dry-run"])
+    feedback_cmd = [
+        sys.executable,
+        "tools/ip_proxy_registrar_feedback.py",
+        "--events",
+        str(flow_events_path),
+        "--out",
+        str(registrar_feedback_path),
+    ]
+    pool_refresh_cmd = [
+        sys.executable,
+        "tools/ip_proxy_pool_refresh.py",
+        "--dry-run",
+        "--registrar-feedback",
+        str(registrar_feedback_path),
+    ]
+    commands.append(feedback_cmd)
+    commands.append(pool_refresh_cmd)
 
     if args.dry_run:
         report = {
@@ -373,6 +392,13 @@ def main() -> int:
     for cmd in commands:
         step_log = log_path if cmd == batch_cmd else captures / f"outlook_batch_verify_{args.run_id}_{Path(cmd[0]).name}.log"
         steps.append(run(cmd, env=env, log_path=step_log, check=cmd != batch_cmd))
+    registrar_feedback = load_json(registrar_feedback_path)
+    pool_refresh = load_json(pool_refresh_latest_path)
+    if registrar_feedback_path.exists():
+        registrar_feedback_latest_path.write_text(
+            json.dumps(registrar_feedback, ensure_ascii=False, indent=2, default=str) + "\n",
+            encoding="utf-8",
+        )
 
     after = result_counts()
     mailhub_after_result = get_outlook_stats()
@@ -401,15 +427,17 @@ def main() -> int:
         "steps": steps,
         "result_detail": result_detail,
         "flow_stats": flow_stats,
-        "registrar_feedback": load_json(captures / "ip_registrar_feedback_latest.json"),
-        "pool_refresh": load_json(captures / "ip_pool_refresh_latest.json"),
+        "registrar_feedback": registrar_feedback,
+        "pool_refresh": pool_refresh,
         "source_quality": source_quality,
         "source_quality_summary": compact_source_quality(source_quality),
         "batch_diagnosis": batch_diagnosis(result_detail, flow_stats, count_delta, mailhub_delta),
         "artifacts": {
             "flow_stats": file_artifact(flow_stats_path),
-            "registrar_feedback": file_artifact(captures / "ip_registrar_feedback_latest.json"),
-            "pool_refresh": file_artifact(captures / "ip_pool_refresh_latest.json"),
+            "flow_events": file_artifact(flow_events_path),
+            "registrar_feedback": file_artifact(registrar_feedback_path),
+            "registrar_feedback_latest": file_artifact(registrar_feedback_latest_path),
+            "pool_refresh": file_artifact(pool_refresh_latest_path),
             "source_quality_json": file_artifact(SOURCE_QUALITY_JSON),
             "source_quality_markdown": file_artifact(SOURCE_QUALITY_MD),
             "proxy_candidate_check": file_artifact(PROXY_CANDIDATE_CHECK),
