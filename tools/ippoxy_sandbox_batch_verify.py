@@ -207,7 +207,9 @@ def _failure_reasons(result_detail: object, flow_stats: object) -> dict[str, int
             continue
         reasons = source.get("failure_reasons")
         if isinstance(reasons, dict):
-            return {str(key): _as_int(value) for key, value in reasons.items() if _as_int(value) > 0}
+            parsed = {str(key): _as_int(value) for key, value in reasons.items() if _as_int(value) > 0}
+            if parsed:
+                return parsed
     return {}
 
 
