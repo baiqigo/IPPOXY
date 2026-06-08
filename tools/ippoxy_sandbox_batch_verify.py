@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -24,6 +25,7 @@ RESULT_FILES = {
     "unlogged_email": ROOT / "Results/unlogged_email.txt",
 }
 IP_RUNTIME = ROOT / ".runtime/ip-proxy"
+DEFAULT_OUTLOOK_PROXY = "http://IPPOXY_RES.outlook-register:daytona@127.0.0.1:2260"
 SOURCE_QUALITY_JSON = IP_RUNTIME / "research/proxy_source_quality_latest.json"
 SOURCE_QUALITY_MD = IP_RUNTIME / "research/proxy_source_quality_latest.md"
 PROXY_CANDIDATE_CHECK = IP_RUNTIME / "research/proxy_candidate_check.latest.json"
@@ -305,6 +307,7 @@ def main() -> int:
     captures = ROOT / "captures"
     report_path = captures / f"outlook_batch_verify_{args.run_id}.json"
     log_path = captures / f"outlook_batch_verify_{args.run_id}.log"
+    flow_stats_dir = captures / f"outlook_flow_{args.run_id}"
     env = os.environ.copy()
     env.update(
         {
@@ -312,6 +315,9 @@ def main() -> int:
             "OUTLOOK_CONCURRENT_FLOWS": str(args.concurrent),
             "OUTLOOK_IP_FAILURE_RETRIES": str(args.ip_failure_retries),
             "OUTLOOK_PROXY_PRECHECK": env.get("OUTLOOK_PROXY_PRECHECK", "1"),
+            "OUTLOOK_PROXY": env.get("OUTLOOK_PROXY", DEFAULT_OUTLOOK_PROXY),
+            "OUTLOOK_PROXY_STICKY_MODE": env.get("OUTLOOK_PROXY_STICKY_MODE", "flow"),
+            "OUTLOOK_FLOW_STATS_DIR": env.get("OUTLOOK_FLOW_STATS_DIR", str(flow_stats_dir)),
         }
     )
 
@@ -332,6 +338,8 @@ def main() -> int:
         batch_cmd = ["docker", "compose", "run", "--rm", "outlook-register"]
     else:
         batch_cmd = [sys.executable, "main.py"]
+        if shutil.which("xvfb-run") and os.environ.get("OUTLOOK_HEADLESS", "").strip().lower() not in ("1", "true", "yes"):
+            batch_cmd = ["xvfb-run", "-a", *batch_cmd]
     commands.append(batch_cmd)
     commands.append([sys.executable, "tools/ip_proxy_registrar_feedback.py"])
     commands.append([sys.executable, "tools/ip_proxy_pool_refresh.py", "--dry-run"])
@@ -371,7 +379,8 @@ def main() -> int:
     mailhub_after = summarize_mailhub_stats(mailhub_after_result)
     mailhub_delta = mailhub_stats_delta(mailhub_before, mailhub_after)
     source_quality = load_json(SOURCE_QUALITY_JSON)
-    flow_stats = load_json(captures / "outlook_flow_stats_latest.json")
+    flow_stats_path = Path(env["OUTLOOK_FLOW_STATS_DIR"]) / "outlook_flow_stats_latest.json"
+    flow_stats = load_json(flow_stats_path)
     count_delta = {key: after.get(key, 0) - before.get(key, 0) for key in sorted(set(before) | set(after))}
     result_detail = tail_result_detail(log_path)
     report = {
@@ -398,7 +407,7 @@ def main() -> int:
         "source_quality_summary": compact_source_quality(source_quality),
         "batch_diagnosis": batch_diagnosis(result_detail, flow_stats, count_delta, mailhub_delta),
         "artifacts": {
-            "flow_stats": file_artifact(captures / "outlook_flow_stats_latest.json"),
+            "flow_stats": file_artifact(flow_stats_path),
             "registrar_feedback": file_artifact(captures / "ip_registrar_feedback_latest.json"),
             "pool_refresh": file_artifact(captures / "ip_pool_refresh_latest.json"),
             "source_quality_json": file_artifact(SOURCE_QUALITY_JSON),
