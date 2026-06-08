@@ -319,6 +319,8 @@ def main() -> int:
         if args.runner == "native":
             release_cmd.append("--skip-docker")
         commands.append(release_cmd)
+    if args.runner == "native":
+        commands.append([sys.executable, "tools/ippoxy_native_env_check.py"])
     build_skipped = False
     if args.build and args.runner == "docker":
         commands.append(["docker", "compose", "build", "outlook-register"])

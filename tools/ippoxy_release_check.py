@@ -29,6 +29,7 @@ REQUIRED_FILES = [
     "tools/ip_proxy_pool_refresh.py",
     "tools/ip_proxy_refresh_apply_verify.py",
     "tools/ip_proxy_runtime_up_native.py",
+    "tools/ippoxy_native_env_check.py",
     "tools/ip_proxy_refill_once.sh",
     "tools/ip_proxy_source_quality_report.py",
     "tools/ip_proxy_candidate_harvest.py",
@@ -71,6 +72,7 @@ def check_imports() -> dict:
         "tools.ip_proxy_pool_refresh",
         "tools.ip_proxy_refresh_apply_verify",
         "tools.ip_proxy_runtime_up_native",
+        "tools.ippoxy_native_env_check",
         "tools.ip_proxy_source_quality_report",
         "tools.ip_proxy_candidate_harvest",
         "challenge_providers.router",
@@ -721,6 +723,67 @@ print("ok")
     return run([sys.executable, "-c", script])
 
 
+def check_native_env_check_reports() -> dict:
+    script = r"""
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+root = Path(tempfile.mkdtemp(prefix="ippoxy_native_env_check_"))
+report = root / "native_env.json"
+env = os.environ.copy()
+env["OUTLOOK_BROWSER_PATH"] = sys.executable
+env["XRAY_BIN"] = str(root / "missing-xray")
+env["RESIN_BIN"] = str(root / "missing-resin")
+proc = subprocess.run(
+    [
+        sys.executable,
+        "tools/ippoxy_native_env_check.py",
+        "--report",
+        str(report),
+        "--json",
+    ],
+    cwd=Path.cwd(),
+    env=env,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+)
+assert proc.returncode == 0, proc.stdout[-1000:]
+data = json.loads(report.read_text(encoding="utf-8"))
+assert data["ok"] is True, data
+assert data["browser"]["exists"] is True, data
+assert data["browser"]["resolved_path"] == sys.executable, data
+assert data["missing_runtime_binaries"] == ["XRAY_BIN", "RESIN_BIN"], data
+
+runtime_report = root / "native_env_runtime.json"
+proc = subprocess.run(
+    [
+        sys.executable,
+        "tools/ippoxy_native_env_check.py",
+        "--require-runtime",
+        "--report",
+        str(runtime_report),
+        "--json",
+    ],
+    cwd=Path.cwd(),
+    env=env,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+)
+assert proc.returncode == 1, proc.stdout[-1000:]
+data = json.loads(runtime_report.read_text(encoding="utf-8"))
+assert "runtime_binaries" in data["failures"], data
+assert data["missing_runtime_binaries"] == ["XRAY_BIN", "RESIN_BIN"], data
+print("ok")
+"""
+    return run([sys.executable, "-c", script])
+
+
 def check_batch_verifier_native_dry_run() -> dict:
     script = r"""
 import json
@@ -751,6 +814,7 @@ assert proc.returncode == 0, proc.stdout[-1000:]
 data = json.loads(proc.stdout)
 assert data["runner"] == "native", data
 assert [sys.executable, "main.py"] in data["commands"], data
+assert [sys.executable, "tools/ippoxy_native_env_check.py"] in data["commands"], data
 assert not any(cmd[:3] == ["docker", "compose", "run"] for cmd in data["commands"]), data
 assert any(cmd[:2] == [sys.executable, "tools/ippoxy_release_check.py"] and "--skip-docker" in cmd for cmd in data["commands"]), data
 print("ok")
@@ -817,6 +881,7 @@ def main() -> int:
                 "tools/ip_proxy_pool_refresh.py",
                 "tools/ip_proxy_refresh_apply_verify.py",
                 "tools/ip_proxy_runtime_up_native.py",
+                "tools/ippoxy_native_env_check.py",
                 "tools/ip_proxy_source_quality_report.py",
                 "tools/ip_proxy_candidate_harvest.py",
             ]
@@ -837,6 +902,7 @@ def main() -> int:
         "refresh_apply_verify_post_batch_dry_run": check_refresh_apply_verify_post_batch_dry_run(),
         "refresh_apply_verify_native_preflight_blocks": check_refresh_apply_verify_native_preflight_blocks(),
         "runtime_up_native_dry_run": check_runtime_up_native_dry_run(),
+        "native_env_check_reports": check_native_env_check_reports(),
         "batch_verifier_native_dry_run": check_batch_verifier_native_dry_run(),
         "candidate_harvest_source_priority": check_candidate_harvest_source_priority(),
     }
