@@ -45,6 +45,26 @@ class BaseBrowserController(ABC):
         self.captures_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'captures')
         os.makedirs(self.captures_dir, exist_ok=True)
 
+    def reset_flow_failure(self):
+        self.thread_local.last_failure_reason = ""
+        self.thread_local.last_failure_details = {}
+
+    def set_flow_failure(self, reason, details=None, overwrite=True):
+        if not overwrite and getattr(self.thread_local, "last_failure_reason", ""):
+            return
+        self.thread_local.last_failure_reason = reason
+        self.thread_local.last_failure_details = details or {}
+        print(
+            f"[FlowFailure] - reason={reason} details={self.thread_local.last_failure_details}",
+            flush=True,
+        )
+
+    def get_flow_failure(self):
+        return {
+            "reason": getattr(self.thread_local, "last_failure_reason", ""),
+            "details": getattr(self.thread_local, "last_failure_details", {}),
+        }
+
     def thread_proxy_url(self):
         mode = os.environ.get("OUTLOOK_PROXY_STICKY_MODE", "").strip().lower()
         if mode not in ("thread", "thread_id", "per_thread", "flow", "task", "per_flow", "per_task"):
@@ -336,12 +356,14 @@ class BaseBrowserController(ABC):
         day = str(random.randint(1, 28))
 
         try:
+            self.reset_flow_failure()
             page.goto("https://outlook.live.com/mail/0/?prompt=create_account", timeout=20000, wait_until="domcontentloaded")
             page.get_by_text('同意并继续').wait_for(timeout=30000)
             start_time = time.time()
             page.wait_for_timeout(0.1 * self.wait_time)
             page.get_by_text('同意并继续').click(timeout=30000)
         except:
+            self.set_flow_failure("entry_failed", {"stage": "entry"})
             self.capture_debug_state(page, "entry_failed")
             print("[Error: IP] - IP质量不佳，无法进入注册界面。")
             return False
@@ -388,21 +410,25 @@ class BaseBrowserController(ABC):
             page.wait_for_timeout(400)
 
             if page.get_by_text('一些异常活动').count() or page.get_by_text('此站点正在维护，暂时无法使用，请稍后重试。').count() > 0:
+                self.set_flow_failure("rate_or_abnormal_after_profile", {"stage": "profile_submit"})
                 self.capture_debug_state(page, "rate_or_abnormal_after_profile")
                 print("[Error: IP or browser] - 当前IP注册频率过快。检查IP与是否为指纹浏览器并关闭了无头模式。")
                 return False
 
             if page.locator('iframe#enforcementFrame').count() > 0:
+                self.set_flow_failure("funcaptcha_type_detected", {"stage": "captcha_detect"})
                 self.capture_debug_state(page, "funcaptcha_type_detected")
                 print("[Error: FunCaptcha] - 验证码类型错误，非按压验证码。")
                 return False
 
             captcha_result = self.handle_captcha(page)
             if not captcha_result:
+                self.set_flow_failure("captcha_result_false", {"stage": "challenge"}, overwrite=False)
                 self.capture_debug_state(page, "captcha_result_false")
                 raise TimeoutError
 
         except Exception:
+            self.set_flow_failure("register_exception", {"stage": "register"}, overwrite=False)
             self.capture_debug_state(page, "register_exception")
             print("[Error: IP] - 加载超时或因触发机器人检测导致按压次数达到最大仍未通过。")
             return False
@@ -432,6 +458,7 @@ class BaseBrowserController(ABC):
             print(f"[AccountReady] - probe failed: {account_status}", flush=True)
 
         if not account_ready:
+            self.set_flow_failure("oauth_pending_not_ready", {"stage": "oauth_ready", "mailbox_ready": mailbox_ready})
             pending_file = os.path.join(self.results_dir, 'oauth_pending.txt')
             with open(pending_file, 'a', encoding='utf-8') as f:
                 f.write(

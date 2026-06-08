@@ -22,6 +22,7 @@ RUNTIME_RESIN_DIR = RUNTIME / "resin"
 DEFAULT_INPUT = RUNTIME_RESIN_DIR / "clean_candidates_classified.latest.json"
 DEFAULT_BASELINE = DOC_RUNTIME_DIR / "turn_xray_pool_20260608.json"
 DEFAULT_VERIFY = ROOT / "captures/ip_runtime_verify_latest.json"
+DEFAULT_REGISTRAR_FEEDBACK = ROOT / "captures/ip_registrar_feedback_latest.json"
 DEFAULT_WORKER_HOST = "ip-proxy-turn-poc.khowk1isgv.workers.dev"
 DEFAULT_UUID = "2523c510-9ff0-415b-9582-93949bfae7e3"
 
@@ -182,6 +183,16 @@ def failed_exit_ips(verify_path: Path) -> set[str]:
     return failed
 
 
+def registrar_failed_exit_ips(feedback_path: Path) -> set[str]:
+    data = read_json(feedback_path, {})
+    if not isinstance(data, dict):
+        return set()
+    failed = data.get("bad_exit_ips", [])
+    if not isinstance(failed, list):
+        return set()
+    return {str(item).strip() for item in failed if str(item).strip()}
+
+
 def normalize_row(item: dict, port: int, worker_host: str, uuid: str, source: str) -> dict:
     raw = item.get("turn") or item.get("raw")
     row = dict(item)
@@ -302,6 +313,7 @@ def main() -> int:
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--baseline", type=Path, default=RUNTIME / "turn_xray_pool_20260608.json")
     parser.add_argument("--verify", type=Path, default=DEFAULT_VERIFY)
+    parser.add_argument("--registrar-feedback", type=Path, default=DEFAULT_REGISTRAR_FEEDBACK)
     parser.add_argument("--worker-host", default=DEFAULT_WORKER_HOST)
     parser.add_argument("--uuid", default=DEFAULT_UUID)
     parser.add_argument("--limit", type=int, default=int(os.environ.get("IP_PROXY_POOL_SIZE", "25")))
@@ -330,10 +342,12 @@ def main() -> int:
         )
         return 0
 
+    verify_failed = failed_exit_ips(args.verify)
+    registrar_failed = registrar_failed_exit_ips(args.registrar_feedback)
     rows, meta = select_rows(
         baseline,
         candidates,
-        failed_exit_ips(args.verify),
+        verify_failed | registrar_failed,
         args.limit,
         args.worker_host,
         args.uuid,
@@ -347,6 +361,10 @@ def main() -> int:
         "baseline": str(baseline_path),
         "input": str(input_path),
         "requested_input": str(args.input),
+        "verify": str(args.verify),
+        "registrar_feedback": str(args.registrar_feedback),
+        "verify_bad_exit_ips": sorted(verify_failed),
+        "registrar_bad_exit_ips": sorted(registrar_failed),
         "fallback_reason": fallback_reason,
         **meta,
         **written,

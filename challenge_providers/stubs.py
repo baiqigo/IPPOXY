@@ -1,6 +1,5 @@
 import os
 import time
-
 from .base import ChallengeProvider, ChallengeResult
 
 
@@ -82,5 +81,23 @@ class PaidCaptchaProvider(ChallengeProvider):
             provider=self.name,
             challenge_type=(evidence or {}).get("type", "unknown"),
             reason="paid captcha provider is not configured in this registrar",
+            evidence=evidence or {},
+        )
+
+
+class SkippedProvider(ChallengeProvider):
+    def __init__(self, name, reason):
+        self.name = name
+        self.reason = reason
+
+    def can_handle(self, challenge_type, evidence):
+        return False
+
+    def solve(self, page, controller, evidence=None):
+        return ChallengeResult(
+            status="skipped",
+            provider=self.name,
+            challenge_type=(evidence or {}).get("type", "unknown"),
+            reason=self.reason,
             evidence=evidence or {},
         )

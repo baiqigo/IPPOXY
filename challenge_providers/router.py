@@ -6,7 +6,22 @@ from pathlib import Path
 from .base import ChallengeResult
 from .classifier import classify_challenge
 from .microsoft_press import MicrosoftPressProvider
-from .stubs import HumanQueueProvider, PaidCaptchaProvider, VisualAgentProvider
+from .stubs import HumanQueueProvider, PaidCaptchaProvider, SkippedProvider, VisualAgentProvider
+
+try:
+    from .altcha_pow import AltchaPowProvider
+except ImportError:
+    AltchaPowProvider = None
+
+try:
+    from .cdp_browser import CdpBrowserProvider
+except ImportError:
+    CdpBrowserProvider = None
+
+try:
+    from .self_hosted_solver import SelfHostedSolverProvider
+except ImportError:
+    SelfHostedSolverProvider = None
 
 
 class ChallengeRouter:
@@ -15,14 +30,33 @@ class ChallengeRouter:
         self.enabled = bool(config.get("enabled", True))
         self.order = config.get("order") or [
             "microsoft_press",
+            "cdp_browser",
             "visual_agent",
+            "altcha_pow",
+            "self_hosted_solver",
             "human_queue",
             "paid_captcha",
         ]
+        self.self_hosted_endpoint = config.get("self_hosted_endpoint", "")
         self.human_timeout_seconds = int(config.get("human_timeout_seconds", 0) or 0)
         self.providers = {
             "microsoft_press": MicrosoftPressProvider(),
+            "cdp_browser": (
+                CdpBrowserProvider()
+                if CdpBrowserProvider
+                else SkippedProvider("cdp_browser", "cdp_browser provider module is not installed")
+            ),
             "visual_agent": VisualAgentProvider(),
+            "altcha_pow": (
+                AltchaPowProvider()
+                if AltchaPowProvider
+                else SkippedProvider("altcha_pow", "altcha_pow provider module is not installed")
+            ),
+            "self_hosted_solver": (
+                SelfHostedSolverProvider(self.self_hosted_endpoint)
+                if SelfHostedSolverProvider
+                else SkippedProvider("self_hosted_solver", "self_hosted_solver provider module is not installed")
+            ),
             "human_queue": HumanQueueProvider(self.human_timeout_seconds),
             "paid_captcha": PaidCaptchaProvider(),
         }
@@ -84,6 +118,17 @@ class ChallengeRouter:
             print(f"[ChallengeRouter] - provider selected: {provider.name}", flush=True)
             result = provider.solve(page, controller, evidence)
             last_result = result
+            if not result.cleared and hasattr(controller, "set_flow_failure"):
+                controller.set_flow_failure(
+                    f"challenge_failed_{result.provider}",
+                    {
+                        "stage": "challenge",
+                        "challenge_type": result.challenge_type,
+                        "provider": result.provider,
+                        "reason": result.reason,
+                    },
+                    overwrite=True,
+                )
             self._save_router_evidence(controller, evidence, result)
             print(
                 f"[ChallengeRouter] - provider={result.provider} "

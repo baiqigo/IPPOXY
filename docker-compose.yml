@@ -13,6 +13,10 @@ services:
       OUTLOOK_PROXY_STICKY_MODE: "${OUTLOOK_PROXY_STICKY_MODE:-flow}"
       OUTLOOK_CONCURRENT_FLOWS: "${OUTLOOK_CONCURRENT_FLOWS:-1}"
       OUTLOOK_MAX_TASKS: "${OUTLOOK_MAX_TASKS:-1}"
+      OUTLOOK_IP_FAILURE_RETRIES: "${OUTLOOK_IP_FAILURE_RETRIES:-1}"
+      OUTLOOK_PROXY_PRECHECK: "${OUTLOOK_PROXY_PRECHECK:-1}"
+      OUTLOOK_PROXY_PRECHECK_URL: "${OUTLOOK_PROXY_PRECHECK_URL:-https://api.ipify.org}"
+      OUTLOOK_PROXY_PRECHECK_TIMEOUT: "${OUTLOOK_PROXY_PRECHECK_TIMEOUT:-12}"
       OUTLOOK_ENABLE_OAUTH2: "${OUTLOOK_ENABLE_OAUTH2:-1}"
       OUTLOOK_OAUTH_CLIENT_ID: "${OUTLOOK_OAUTH_CLIENT_ID:-9e5f94bc-e8a4-4e73-b8be-63364c29d753}"
       OUTLOOK_OAUTH_REDIRECT_URL: "${OUTLOOK_OAUTH_REDIRECT_URL:-https://localhost}"
@@ -86,5 +90,21 @@ services:
       MAIL_HUB_OUTLOOK_GROUP: "${MAIL_HUB_OUTLOOK_GROUP:-IPPOXY}"
     volumes:
       - ./Results:/app/Results
+      - ./captures:/app/captures
     entrypoint: []
     command: ["python", "-u", "mailhub_import_tokens.py"]
+
+  mailhub-outlook-smoke:
+    image: outlook-register-lainsnl:staging
+    network_mode: host
+    environment:
+      MAIL_HUB_URL: "${MAIL_HUB_URL:-http://127.0.0.1:3100}"
+      MAIL_HUB_API_SECRET: "${MAIL_HUB_API_SECRET:-}"
+      MAILPILOT_TOKEN: "${MAILPILOT_TOKEN:-}"
+      MAILPILOT_API_KEY: "${MAILPILOT_API_KEY:-}"
+      MAILPILOT_API_SECRET: "${MAILPILOT_API_SECRET:-}"
+    volumes:
+      - ./Results:/app/Results
+      - ./captures:/app/captures
+    entrypoint: []
+    command: ["python", "-u", "mailhub_outlook_smoke.py", "--write-report", "captures/mailhub_outlook_smoke_latest.json"]

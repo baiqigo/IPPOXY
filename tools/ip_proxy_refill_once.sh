@@ -33,6 +33,8 @@ fi
   --run-id "$RUN_ID" \
   --input ".runtime/ip-proxy/research/proxy_candidate_check_${RUN_ID}.json"
 
+"$PYTHON_BIN" tools/ip_proxy_registrar_feedback.py || true
+
 POOL_REFRESH_ARGS=(--input ".runtime/ip-proxy/resin/clean_candidates_classified.latest.json")
 if [[ "${IP_PROXY_APPLY_RUNTIME:-1}" != "1" ]]; then
   POOL_REFRESH_ARGS+=(--dry-run)
