@@ -55,6 +55,10 @@ def run(cmd: list[str], *, check: bool = False) -> dict:
     return item
 
 
+def skipped_step(name: str, reason: str) -> dict:
+    return {"cmd": [], "name": name, "status": "skipped", "reason": reason, "ok": True}
+
+
 def load_json(path: Path) -> object:
     if not path.exists():
         return {}
@@ -87,6 +91,14 @@ def summarize_batch_report(path: Path) -> dict:
             "needs_program_fix": diagnosis.get("needs_program_fix"),
         },
     }
+
+
+def runtime_up_command(runner: str) -> list[str]:
+    if runner == "native":
+        return [sys.executable, "tools/ip_proxy_runtime_up_native.py"]
+    if runner == "docker":
+        return ["bash", "tools/ip_proxy_runtime_up.sh"]
+    return []
 
 
 def backup_runtime_files(backup_dir: Path, files: list[Path] | None = None) -> dict:
@@ -132,6 +144,12 @@ def main() -> int:
     parser.add_argument("--apply", action="store_true", help="Actually write runtime files and restart Xray/Resin.")
     parser.add_argument("--skip-verify", action="store_true", help="Skip runtime verification after apply.")
     parser.add_argument("--no-rollback", action="store_true", help="Do not restore the previous runtime files on failure.")
+    parser.add_argument(
+        "--runtime-runner",
+        choices=["native", "docker", "skip"],
+        default=os.environ.get("IP_PROXY_RUNTIME_RUNNER", "native"),
+        help="Runtime restart method after apply. native avoids Docker; skip only writes refreshed files.",
+    )
     parser.add_argument("--run-batch", action="store_true", help="After a successful apply, run Outlook batch verification.")
     parser.add_argument("--batch-tasks", type=int, default=int(os.environ.get("OUTLOOK_BATCH_VERIFY_TASKS", "3")))
     parser.add_argument("--batch-concurrent", type=int, default=int(os.environ.get("OUTLOOK_BATCH_VERIFY_CONCURRENT", "1")))
@@ -169,11 +187,14 @@ def main() -> int:
         batch_cmd.append("--build")
     if args.batch_skip_release_check:
         batch_cmd.append("--skip-release-check")
+    runtime_cmd = runtime_up_command(args.runtime_runner)
 
     backup_dir = RUNTIME / "backups" / time.strftime("refresh_%Y%m%d_%H%M%S", time.gmtime())
     report = {
         "ts": int(time.time()),
         "apply": bool(args.apply),
+        "runtime_runner": args.runtime_runner,
+        "runtime_cmd": runtime_cmd,
         "run_batch": bool(args.run_batch),
         "root": str(ROOT),
         "runtime": str(RUNTIME),
@@ -201,13 +222,20 @@ def main() -> int:
     report["backup"] = backup_runtime_files(backup_dir)
     try:
         report["steps"].append(run([sys.executable, "tools/ip_proxy_pool_refresh.py", *args.pool_refresh_arg], check=True))
-        report["steps"].append(run(["bash", "tools/ip_proxy_runtime_up.sh"], check=True))
-        if not args.skip_verify:
+        if args.runtime_runner == "skip":
+            report["steps"].append(skipped_step("runtime_up", "runtime_runner_skip"))
+        else:
+            report["steps"].append(run(runtime_cmd, check=True))
+        if args.runtime_runner == "skip":
+            report["steps"].append(skipped_step("runtime_verify", "runtime_runner_skip"))
+        elif not args.skip_verify:
             report["steps"].append(run([sys.executable, "tools/ip_proxy_runtime_verify.py"], check=True))
+        else:
+            report["steps"].append(skipped_step("runtime_verify", "skip_verify"))
         if args.run_batch:
             report["steps"].append(run(batch_cmd, check=False))
             report["post_refresh_batch"]["summary"] = summarize_batch_report(batch_report_path)
-        report["status"] = "ok"
+        report["status"] = "ok" if args.runtime_runner != "skip" else "files_refreshed_runtime_skipped"
         exit_code = 0
         if args.run_batch and not report["steps"][-1]["ok"]:
             report["status"] = "batch_failed"
@@ -218,9 +246,16 @@ def main() -> int:
         exit_code = 1
         if not args.no_rollback:
             report["rollback"] = restore_runtime_files(backup_dir)
-            report["steps"].append(run(["bash", "tools/ip_proxy_runtime_up.sh"]))
-            if not args.skip_verify:
+            if args.runtime_runner == "skip":
+                report["steps"].append(skipped_step("runtime_up_rollback", "runtime_runner_skip"))
+            else:
+                report["steps"].append(run(runtime_cmd))
+            if args.runtime_runner == "skip":
+                report["steps"].append(skipped_step("runtime_verify_rollback", "runtime_runner_skip"))
+            elif not args.skip_verify:
                 report["steps"].append(run([sys.executable, "tools/ip_proxy_runtime_verify.py"]))
+            else:
+                report["steps"].append(skipped_step("runtime_verify_rollback", "skip_verify"))
 
     report["runtime_files_after"] = [file_artifact(path) for path in RUNTIME_FILES]
     write_report(report, args.report)
