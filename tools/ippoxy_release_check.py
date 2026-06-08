@@ -198,6 +198,80 @@ print("ok")
     return run([sys.executable, "-c", script])
 
 
+def check_bad_exit_precheck_skip() -> dict:
+    script = r"""
+import io
+import json
+import os
+import tempfile
+from contextlib import redirect_stdout
+from pathlib import Path
+
+root = Path(tempfile.mkdtemp(prefix="ippoxy_bad_exit_skip_"))
+captures = root / "captures"
+captures.mkdir(parents=True)
+(captures / "ip_registrar_feedback_latest.json").write_text(
+    json.dumps({"bad_exit_ips": ["10.0.0.9"]}),
+    encoding="utf-8",
+)
+os.environ["IPPOXY_ROOT"] = str(root)
+os.environ["OUTLOOK_IP_FAILURE_RETRIES"] = "0"
+os.environ["OUTLOOK_IP_RETRY_DELAY_MIN_S"] = "0"
+os.environ["OUTLOOK_IP_RETRY_DELAY_MAX_S"] = "0"
+os.environ["OUTLOOK_TASK_SUBMIT_DELAY_MIN_S"] = "0"
+os.environ["OUTLOOK_TASK_SUBMIT_DELAY_MAX_S"] = "0"
+os.environ["OUTLOOK_PROXY_PRECHECK_SKIP_BAD"] = "1"
+os.environ["OUTLOOK_PROXY_PRECHECK"] = "0"
+os.environ["OUTLOOK_FLOW_STATS_DIR"] = str(captures)
+
+import main
+
+main.probe_exit_ip = lambda proxy_url: {"enabled": True, "ok": True, "ip": "10.0.0.9"}
+
+class FakeController:
+    email_suffix = "@hotmail.com"
+    enable_oauth2 = False
+    oauth2_client_id = "client"
+    def __init__(self):
+        self.register_called = 0
+        self.failure = {"reason": "", "details": {}}
+    def begin_flow_proxy_identity(self):
+        pass
+    def reset_flow_failure(self):
+        self.failure = {"reason": "", "details": {}}
+    def set_flow_failure(self, reason, details=None):
+        self.failure = {"reason": reason, "details": details or {}}
+    def get_thread_page(self):
+        raise AssertionError("browser should not start for known bad exit")
+    def thread_proxy_url(self):
+        return "http://IPPOXY_RES.bad-exit-check:daytona@127.0.0.1:2260"
+    def outlook_register(self, page, email, password):
+        self.register_called += 1
+        return True
+    def get_flow_failure(self):
+        return self.failure
+    def clean_up(self, page=None, type="all_browser"):
+        pass
+
+controller = FakeController()
+buf = io.StringIO()
+with redirect_stdout(buf):
+    result = main.process_single_flow(controller)
+assert result is False
+assert controller.register_called == 0
+events = [
+    json.loads(line)
+    for line in (captures / "outlook_flow_events.jsonl").read_text(encoding="utf-8").splitlines()
+    if line.strip()
+]
+attempts = [item for item in events if item["event"] == "registration_attempt_result"]
+assert attempts[0]["failure_reason"] == "proxy_precheck_bad_exit", attempts
+assert attempts[0]["result_stage"] == "proxy_precheck_skip", attempts
+print("ok")
+"""
+    return run([sys.executable, "-c", script])
+
+
 def check_registrar_feedback_diagnostics() -> dict:
     script = r"""
 from tools.ip_proxy_registrar_feedback import build_feedback
@@ -268,6 +342,7 @@ def main() -> int:
         "router_without_optional_providers": check_router_without_optional_providers(),
         "fake_flow_summary": check_fake_flow_summary(),
         "flow_throttle_zero_delay": check_flow_throttle_zero_delay(),
+        "bad_exit_precheck_skip": check_bad_exit_precheck_skip(),
         "registrar_feedback_diagnostics": check_registrar_feedback_diagnostics(),
     }
     if args.skip_docker or shutil.which("docker") is None:

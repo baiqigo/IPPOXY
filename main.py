@@ -2,6 +2,7 @@ import os
 import random
 import time
 import json
+from pathlib import Path
 from get_token import get_access_token
 from mailhub_client import import_outlook_account
 from outlook_flow_stats import append_event, attempt_id, build_attempt_event, compact_summary, probe_exit_ip, summarize_events
@@ -11,6 +12,7 @@ from utils import random_email, generate_strong_password
 
 RETRYABLE_REGISTER_FAILURES = {
     "entry_failed",
+    "proxy_precheck_bad_exit",
     "rate_or_abnormal_after_profile",
 }
 
@@ -38,6 +40,16 @@ def get_float_env(name, default):
         return float(default)
 
 
+def get_bool_env(name, default):
+    raw = os.environ.get(name, "1" if default else "0").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    print(f"[Warn: Config] - invalid {name}={raw!r}; using {default}", flush=True)
+    return bool(default)
+
+
 def sleep_random_delay(label, min_env, max_env, default_min, default_max):
     min_s = max(0.0, get_float_env(min_env, default_min))
     max_s = max(0.0, get_float_env(max_env, default_max))
@@ -50,6 +62,58 @@ def sleep_random_delay(label, min_env, max_env, default_min, default_max):
         return
     print(f"[FlowThrottle] - {label} delay_s={delay_s:.1f}", flush=True)
     time.sleep(delay_s)
+
+
+def read_json_file(path):
+    try:
+        file_path = Path(path)
+        if not file_path.exists():
+            return {}
+        data = json.loads(file_path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def known_bad_exit_ips():
+    root = Path(os.environ.get("IPPOXY_ROOT", Path(__file__).resolve().parent))
+    captures = root / "captures"
+    feedback_path = os.environ.get("OUTLOOK_REGISTRAR_FEEDBACK_FILE", str(captures / "ip_registrar_feedback_latest.json"))
+    verify_path = os.environ.get("OUTLOOK_RUNTIME_VERIFY_FILE", str(captures / "ip_runtime_verify_latest.json"))
+    bad = set()
+
+    feedback = read_json_file(feedback_path)
+    feedback_bad = feedback.get("bad_exit_ips", [])
+    if isinstance(feedback_bad, list):
+        bad.update(str(item).strip() for item in feedback_bad if str(item).strip())
+
+    verify = read_json_file(verify_path)
+    for item in verify.get("port_results", []):
+        if isinstance(item, dict) and not item.get("ok") and item.get("expected"):
+            bad.add(str(item["expected"]).strip())
+
+    return bad
+
+
+def proxy_precheck_bad_exit_failure(exit_probe):
+    if not get_bool_env("OUTLOOK_PROXY_PRECHECK_SKIP_BAD", True):
+        return None
+    if not isinstance(exit_probe, dict) or not exit_probe.get("ok") or not exit_probe.get("ip"):
+        return None
+    exit_ip = str(exit_probe.get("ip") or "").strip()
+    if not exit_ip:
+        return None
+    bad_ips = known_bad_exit_ips()
+    if exit_ip not in bad_ips:
+        return None
+    return {
+        "reason": "proxy_precheck_bad_exit",
+        "details": {
+            "stage": "proxy_precheck",
+            "exit_ip": exit_ip,
+            "source": "registrar_feedback_or_runtime_verify",
+        },
+    }
 
 
 def run_registration_attempt(controller, attempt_index, total_attempts):
@@ -65,6 +129,30 @@ def run_registration_attempt(controller, attempt_index, total_attempts):
     proxy_url = controller.thread_proxy_url() if hasattr(controller, "thread_proxy_url") else ""
     current_attempt_id = attempt_id(attempt_index)
     exit_probe = probe_exit_ip(proxy_url)
+    precheck_failure = proxy_precheck_bad_exit_failure(exit_probe)
+    if precheck_failure:
+        if hasattr(controller, "set_flow_failure"):
+            controller.set_flow_failure(precheck_failure["reason"], precheck_failure["details"])
+        print(
+            f"[FlowAttempt] - skip known bad exit_ip={precheck_failure['details']['exit_ip']} "
+            f"attempt={attempt_index}/{total_attempts}",
+            flush=True,
+        )
+        append_event(
+            build_attempt_event(
+                event="registration_attempt_result",
+                attempt_id_value=current_attempt_id,
+                attempt_index=attempt_index,
+                total_attempts=total_attempts,
+                full_email=full_email,
+                proxy_url=proxy_url,
+                exit_probe=exit_probe,
+                success=False,
+                failure=precheck_failure,
+                result_stage="proxy_precheck_skip",
+            )
+        )
+        return page, email, password, False, precheck_failure, current_attempt_id, proxy_url, exit_probe
 
     try:
         page = controller.get_thread_page()

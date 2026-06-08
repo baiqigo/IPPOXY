@@ -16,6 +16,7 @@ DEFAULT_EVENTS = ROOT / "captures/outlook_flow_events.jsonl"
 DEFAULT_OUT = ROOT / "captures/ip_registrar_feedback_latest.json"
 RETRYABLE_IP_REASONS = {
     "entry_failed",
+    "proxy_precheck_bad_exit",
     "rate_or_abnormal_after_profile",
 }
 
