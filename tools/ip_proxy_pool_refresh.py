@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import hashlib
 import json
 import os
@@ -307,13 +308,85 @@ def resolve_candidate_input(
 
 
 def failed_exit_ips(verify_path: Path) -> set[str]:
+    return {
+        exit_ip
+        for exit_ip, detail in failed_exit_details(verify_path).items()
+        if exit_ip and not detail.get("sentinel")
+    }
+
+
+def failed_exit_details(verify_path: Path) -> dict[str, dict]:
     data = read_json(verify_path, {})
     if not isinstance(data, dict):
-        return set()
-    failed = set()
+        return {}
+    failed: dict[str, dict] = {}
+
+    def add(exit_ip: object, reason: str, source: str, **extra: object) -> None:
+        value = str(exit_ip or "").strip()
+        if not value:
+            return
+        item = failed.setdefault(value, {"exit_ip": value, "reasons": {}, "sources": set()})
+        item["reasons"][reason] = int(item["reasons"].get(reason, 0)) + 1
+        item["sources"].add(source)
+        for key, val in extra.items():
+            if val not in (None, "", [], {}):
+                item[key] = val
+
     for item in data.get("port_results", []):
         if isinstance(item, dict) and not item.get("ok") and item.get("expected"):
-            failed.add(str(item["expected"]))
+            add(
+                item.get("expected"),
+                "port_result_failed",
+                "port_results",
+                port=item.get("port"),
+                got=str(item.get("got") or "")[:300],
+            )
+
+    resin_tests = [item for item in data.get("resin_tests", []) if isinstance(item, dict)]
+    exit_counter: collections.Counter[str] = collections.Counter()
+    for item in resin_tests:
+        exit_ip = str(item.get("exit_ip") or "").strip()
+        identity = str(item.get("identity") or "")
+        if exit_ip:
+            exit_counter[exit_ip] += 1
+        if exit_ip and item.get("bad_exit"):
+            add(exit_ip, "resin_bad_exit_hit", "resin_tests", identity=identity)
+        target_failed = item.get("target_ok") is False or ("target_ok" not in item and item.get("signup_ok") is False)
+        if exit_ip and item.get("ok") and target_failed:
+            add(
+                exit_ip,
+                "resin_target_failed",
+                "resin_tests",
+                identity=identity,
+                target_status=item.get("target_status") or item.get("signup_status"),
+            )
+
+    unique_res_count = safe_int(data.get("unique_res_exit_count"))
+    resin_total = safe_int(data.get("resin_total"))
+    resin_ok = safe_int(data.get("resin_ok"))
+    min_unique_res = safe_int(data.get("min_unique_res_exits") or os.environ.get("IP_PROXY_MIN_UNIQUE_RES_EXITS", "12"))
+    if resin_ok > 0 and unique_res_count > 0 and unique_res_count < min_unique_res:
+        for exit_ip, count in exit_counter.items():
+            add(
+                exit_ip,
+                "resin_low_diversity",
+                "resin_tests",
+                resin_identity_hits=count,
+                unique_res_exit_count=unique_res_count,
+                min_unique_res_exits=min_unique_res,
+            )
+    if resin_total > 0 and resin_ok == 0:
+        failed["__runtime_resin_unusable__"] = {
+            "exit_ip": "",
+            "reasons": {"resin_all_identities_failed": resin_total},
+            "sources": {"resin_tests"},
+            "sentinel": True,
+        }
+
+    for item in failed.values():
+        sources = item.get("sources")
+        if isinstance(sources, set):
+            item["sources"] = sorted(sources)
     return failed
 
 
@@ -556,7 +629,12 @@ def main() -> int:
         )
         return 0 if args.dry_run else 2
 
-    verify_failed = failed_exit_ips(args.verify)
+    verify_failed_details = failed_exit_details(args.verify)
+    verify_failed = {
+        exit_ip
+        for exit_ip, detail in verify_failed_details.items()
+        if exit_ip and not detail.get("sentinel")
+    }
     registrar_failed = registrar_failed_exit_ips(args.registrar_feedback)
     rows, meta = select_rows(
         baseline,
@@ -582,6 +660,7 @@ def main() -> int:
             "source_quality": source_quality_meta,
             "candidate_input_audit": candidate_input_audit,
             "verify_bad_exit_ips": sorted(verify_failed),
+            "verify_bad_exit_details": verify_failed_details,
             "registrar_bad_exit_ips": sorted(registrar_failed),
             "fallback_reason": fallback_reason,
             "min_new_candidates": args.min_new_candidates,
@@ -609,6 +688,7 @@ def main() -> int:
         "source_quality": source_quality_meta,
         "candidate_input_audit": candidate_input_audit,
         "verify_bad_exit_ips": sorted(verify_failed),
+        "verify_bad_exit_details": verify_failed_details,
         "registrar_bad_exit_ips": sorted(registrar_failed),
         "fallback_reason": fallback_reason,
         "min_new_candidates": args.min_new_candidates,

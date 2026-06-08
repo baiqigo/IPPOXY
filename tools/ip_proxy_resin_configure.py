@@ -6,6 +6,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+import argparse
 from pathlib import Path
 
 
@@ -13,6 +14,13 @@ ROOT = Path(os.environ.get("IPPOXY_ROOT", "/home/daytona/IPPOXY"))
 BASE = os.environ.get("RESIN_BASE_URL", "http://127.0.0.1:2260/api/v1").rstrip("/")
 ADMIN_TOKEN = os.environ.get("RESIN_ADMIN_TOKEN", "daytona-admin")
 RUNTIME = Path(os.environ.get("IP_PROXY_RUNTIME_DIR", ROOT / ".runtime/ip-proxy"))
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def request(method: str, path: str, body: dict | None = None, retry_without: tuple[str, ...] = ()) -> object:
@@ -48,7 +56,7 @@ def find_by_name(path: str, name: str) -> dict | None:
     return None
 
 
-def upsert_subscription() -> str:
+def upsert_subscription(*, force_replace: bool = False) -> str:
     content_file = Path(
         os.environ.get(
             "RESIN_SUBSCRIPTION_FILE",
@@ -58,6 +66,8 @@ def upsert_subscription() -> str:
     if not content_file.exists():
         content_file = ROOT / "docs/ip-proxy/resin/turn_xray_pool_25.local.txt"
     content = content_file.read_text(encoding="utf-8")
+    incremental_alive_nodes = not force_replace and env_bool("RESIN_INCREMENTAL_ALIVE_NODES", True)
+    evict_delay = os.environ.get("RESIN_EPHEMERAL_NODE_EVICT_DELAY", "0s" if force_replace else "30m")
     body = {
         "name": "ippoxy-turn-xray-local",
         "source_type": "local",
@@ -65,8 +75,8 @@ def upsert_subscription() -> str:
         "update_interval": "5m",
         "enabled": True,
         "ephemeral": True,
-        "incremental_alive_nodes": True,
-        "ephemeral_node_evict_delay": "30m",
+        "incremental_alive_nodes": incremental_alive_nodes,
+        "ephemeral_node_evict_delay": evict_delay,
     }
     existing = find_by_name("/subscriptions?limit=200", body["name"])
     retry_without = ("incremental_alive_nodes",)
@@ -81,10 +91,13 @@ def upsert_subscription() -> str:
     return str(sub_id)
 
 
-def upsert_platform(payload: dict) -> str:
+def upsert_platform(payload: dict, *, force_replace: bool = False) -> str:
+    sticky_ttl = os.environ.get(f"RESIN_{payload['name']}_STICKY_TTL", "")
+    if not sticky_ttl and force_replace:
+        sticky_ttl = os.environ.get("RESIN_FORCE_REPLACE_STICKY_TTL", "5m")
     body = {
         "name": payload["name"],
-        "sticky_ttl": payload["sticky_ttl"],
+        "sticky_ttl": sticky_ttl or payload["sticky_ttl"],
         "regex_filters": payload["regex_filters"],
         "region_filters": payload.get("region_filters", []),
         "reverse_proxy_miss_action": payload["reverse_proxy_miss_action"],
@@ -106,6 +119,15 @@ def upsert_platform(payload: dict) -> str:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--force-replace",
+        action="store_true",
+        default=env_bool("RESIN_FORCE_REPLACE", False),
+        help="Disable incremental alive-node preservation and shorten sticky state for repair refreshes.",
+    )
+    args = parser.parse_args()
+
     for _ in range(60):
         try:
             urllib.request.urlopen("http://127.0.0.1:2260/healthz", timeout=3).read()
@@ -115,10 +137,19 @@ def main() -> None:
     else:
         raise SystemExit("Resin healthz not ready")
 
-    sub_id = upsert_subscription()
+    sub_id = upsert_subscription(force_replace=args.force_replace)
     payloads = json.loads((ROOT / "docs/ip-proxy/resin/platform_payloads.json").read_text(encoding="utf-8"))
-    platforms = {p["name"]: upsert_platform(p) for p in payloads["platforms"]}
-    print(json.dumps({"subscription": sub_id, "platforms": platforms}, ensure_ascii=False))
+    platforms = {p["name"]: upsert_platform(p, force_replace=args.force_replace) for p in payloads["platforms"]}
+    print(
+        json.dumps(
+            {
+                "subscription": sub_id,
+                "platforms": platforms,
+                "force_replace": args.force_replace,
+            },
+            ensure_ascii=False,
+        )
+    )
 
 
 if __name__ == "__main__":

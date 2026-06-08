@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import ipaddress
 import json
 import os
 import subprocess
@@ -24,7 +25,10 @@ if not MAPPING.exists():
     MAPPING = ROOT / "docs/ip-proxy/research/runtime/turn_xray_pool_20260608.json"
 REGISTRAR_FEEDBACK = Path(os.environ.get("OUTLOOK_REGISTRAR_FEEDBACK_FILE", ROOT / "captures/ip_registrar_feedback_latest.json"))
 IPIFY_URL = os.environ.get("IP_PROXY_VERIFY_IP_URL", "https://api.ipify.org")
-SIGNUP_URL = os.environ.get("IP_PROXY_VERIFY_SIGNUP_URL", "https://signup.live.com/signup")
+TARGET_URL = os.environ.get(
+    "IP_PROXY_VERIFY_TARGET_URL",
+    os.environ.get("IP_PROXY_VERIFY_SIGNUP_URL", IPIFY_URL),
+)
 
 
 def curl(args: list[str], timeout: int = 25) -> str:
@@ -32,6 +36,14 @@ def curl(args: list[str], timeout: int = 25) -> str:
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or f"curl failed: {proc.returncode}")
     return proc.stdout.strip()
+
+
+def looks_like_ip(value: object) -> bool:
+    try:
+        ipaddress.ip_address(str(value).strip())
+        return True
+    except ValueError:
+        return False
 
 
 def read_json(path: Path, default: object) -> object:
@@ -52,11 +64,11 @@ def registrar_bad_exit_ips(path: Path) -> set[str]:
     return out
 
 
-def check_port(row: dict, timeout: int) -> dict:
+def check_port(row: dict, timeout: int, ip_url: str) -> dict:
     port = int(row["local_port"])
     expected = str(row["exit_ip"])
     try:
-        got = curl(["-x", f"socks5h://127.0.0.1:{port}", IPIFY_URL], timeout=timeout)
+        got = curl(["-x", f"socks5h://127.0.0.1:{port}", ip_url], timeout=timeout)
         ok = got == expected
     except Exception as exc:
         got = str(exc)
@@ -64,11 +76,18 @@ def check_port(row: dict, timeout: int) -> dict:
     return {"port": port, "expected": expected, "got": got, "ok": ok, "pool_class": row.get("pool_class"), "tag": row.get("tag")}
 
 
-def check_resin_identity(identity: str, timeout: int, signup_timeout: int, bad_exit_ips: set[str]) -> dict:
+def check_resin_identity(
+    identity: str,
+    timeout: int,
+    target_timeout: int,
+    bad_exit_ips: set[str],
+    ip_url: str,
+    target_url: str,
+) -> dict:
     try:
-        socks_got = curl(["--proxy", "socks5h://127.0.0.1:2260", "-U", f"{identity}:daytona", IPIFY_URL], timeout=timeout)
-        http_got = curl(["--proxy", f"http://{identity}:daytona@127.0.0.1:2260", IPIFY_URL], timeout=timeout)
-        signup_status = curl(
+        socks_got = curl(["--proxy", "socks5h://127.0.0.1:2260", "-U", f"{identity}:daytona", ip_url], timeout=timeout)
+        http_got = curl(["--proxy", f"http://{identity}:daytona@127.0.0.1:2260", ip_url], timeout=timeout)
+        target_status = curl(
             [
                 "--proxy",
                 f"http://{identity}:daytona@127.0.0.1:2260",
@@ -78,25 +97,29 @@ def check_resin_identity(identity: str, timeout: int, signup_timeout: int, bad_e
                 "/dev/null",
                 "-w",
                 "%{http_code}",
-                SIGNUP_URL,
+                target_url,
             ],
-            timeout=signup_timeout,
+            timeout=target_timeout,
         )
         ok = bool(socks_got) and socks_got == http_got
-        got: object = {"socks5h": socks_got, "http": http_got, "signup_status": signup_status}
-        exit_ip = socks_got if ok else ""
+        target_ok = target_status in {"200", "204", "301", "302", "303"}
+        got: object = {"socks5h": socks_got, "http": http_got, "target_status": target_status, "signup_status": target_status}
+        exit_ip = socks_got if looks_like_ip(socks_got) else ""
     except Exception as exc:
         got = str(exc)
         ok = False
-        signup_status = ""
+        target_status = ""
+        target_ok = False
         exit_ip = ""
     return {
         "identity": identity,
         "exit_ip": exit_ip,
         "got": got,
         "ok": ok,
-        "signup_status": signup_status,
-        "signup_ok": signup_status in {"200", "301", "302", "303"},
+        "target_status": target_status,
+        "target_ok": target_ok,
+        "signup_status": target_status,
+        "signup_ok": target_ok,
         "bad_exit": bool(exit_ip and exit_ip in bad_exit_ips),
     }
 
@@ -109,19 +132,23 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--workers", type=int, default=int(os.environ.get("IP_PROXY_VERIFY_WORKERS", "12")))
     parser.add_argument("--timeout", type=int, default=int(os.environ.get("IP_PROXY_VERIFY_TIMEOUT", "25")))
-    parser.add_argument("--signup-timeout", type=int, default=int(os.environ.get("IP_PROXY_VERIFY_SIGNUP_TIMEOUT", "35")))
+    parser.add_argument("--target-timeout", type=int, default=int(os.environ.get("IP_PROXY_VERIFY_TARGET_TIMEOUT", os.environ.get("IP_PROXY_VERIFY_SIGNUP_TIMEOUT", "35"))))
+    parser.add_argument("--signup-timeout", type=int, default=None, help="Backward-compatible alias for --target-timeout.")
     parser.add_argument("--res-identities", type=int, default=int(os.environ.get("IP_PROXY_VERIFY_RES_IDENTITIES", "24")))
     parser.add_argument("--static-identities", type=int, default=int(os.environ.get("IP_PROXY_VERIFY_STATIC_IDENTITIES", "8")))
     parser.add_argument("--all-identities", type=int, default=int(os.environ.get("IP_PROXY_VERIFY_ALL_IDENTITIES", "8")))
     parser.add_argument("--min-unique-res-exits", type=int, default=int(os.environ.get("IP_PROXY_MIN_UNIQUE_RES_EXITS", "12")))
+    parser.add_argument("--ip-url", default=IPIFY_URL, help="Neutral endpoint returning the observed exit IP.")
+    parser.add_argument("--target-url", default=TARGET_URL, help="Neutral target endpoint used for routed HTTP status checks.")
     parser.add_argument("--run-id", default=time.strftime("%Y%m%d%H%M%S", time.gmtime()))
     args = parser.parse_args()
+    target_timeout = args.signup_timeout if args.signup_timeout is not None else args.target_timeout
 
     rows = json.loads(MAPPING.read_text(encoding="utf-8"))
     bad_exit_ips = registrar_bad_exit_ips(REGISTRAR_FEEDBACK)
     port_results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
-        futures = [executor.submit(check_port, row, args.timeout) for row in rows]
+        futures = [executor.submit(check_port, row, args.timeout, args.ip_url) for row in rows]
         for future in concurrent.futures.as_completed(futures):
             port_results.append(future.result())
     port_results.sort(key=lambda item: item.get("port", 0))
@@ -134,7 +161,7 @@ def main() -> None:
     resin_tests = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
         futures = [
-            executor.submit(check_resin_identity, identity, args.timeout, args.signup_timeout, bad_exit_ips)
+            executor.submit(check_resin_identity, identity, args.timeout, target_timeout, bad_exit_ips, args.ip_url, args.target_url)
             for identity in identities
         ]
         for future in concurrent.futures.as_completed(futures):
@@ -156,11 +183,14 @@ def main() -> None:
         "ts": int(time.time()),
         "mapping_file": str(MAPPING),
         "registrar_feedback": str(REGISTRAR_FEEDBACK),
+        "verify_ip_url": args.ip_url,
+        "verify_target_url": args.target_url,
         "registrar_bad_exit_ips": sorted(bad_exit_ips),
         "ports_ok": sum(1 for item in port_results if item["ok"]),
         "ports_total": len(port_results),
         "resin_ok": sum(1 for item in resin_tests if item["ok"]),
         "resin_total": len(resin_tests),
+        "resin_target_ok": sum(1 for item in resin_tests if item.get("target_ok")),
         "resin_signup_ok": sum(1 for item in resin_tests if item.get("signup_ok")),
         "resin_bad_exit_hits": sum(1 for item in resin_tests if item.get("bad_exit")),
         "unique_res_exit_ips": sorted({item["exit_ip"] for item in resin_tests if item.get("identity", "").startswith("IPPOXY_RES.") and item.get("exit_ip")}),

@@ -122,9 +122,12 @@ def summarize_batch_report(path: Path) -> dict:
     }
 
 
-def runtime_up_command(runner: str) -> list[str]:
+def runtime_up_command(runner: str, *, resin_force_replace: bool = False) -> list[str]:
     if runner == "native":
-        return [sys.executable, "tools/ip_proxy_runtime_up_native.py"]
+        cmd = [sys.executable, "tools/ip_proxy_runtime_up_native.py"]
+        if resin_force_replace:
+            cmd.append("--resin-force-replace")
+        return cmd
     if runner == "docker":
         return ["bash", "tools/ip_proxy_runtime_up.sh"]
     return []
@@ -193,6 +196,12 @@ def main() -> int:
     parser.add_argument("--batch-build", action="store_true", help="Build outlook-register before the post-refresh batch.")
     parser.add_argument("--batch-skip-release-check", action="store_true")
     parser.add_argument("--pool-refresh-arg", action="append", default=[], help="Extra arg forwarded to ip_proxy_pool_refresh.py.")
+    parser.add_argument(
+        "--resin-force-replace",
+        action="store_true",
+        default=os.environ.get("RESIN_FORCE_REPLACE", "0").strip().lower() in ("1", "true", "yes", "on"),
+        help="When using native runtime, configure Resin in repair mode after refresh.",
+    )
     parser.add_argument("--report", type=Path, default=REPORT)
     args = parser.parse_args()
 
@@ -216,13 +225,14 @@ def main() -> int:
         batch_cmd.append("--build")
     if args.batch_skip_release_check:
         batch_cmd.append("--skip-release-check")
-    runtime_cmd = runtime_up_command(args.runtime_runner)
+    runtime_cmd = runtime_up_command(args.runtime_runner, resin_force_replace=args.resin_force_replace)
 
     backup_dir = RUNTIME / "backups" / time.strftime("refresh_%Y%m%d_%H%M%S", time.gmtime())
     report = {
         "ts": int(time.time()),
         "apply": bool(args.apply),
         "runtime_runner": args.runtime_runner,
+        "resin_force_replace": bool(args.resin_force_replace),
         "runtime_cmd": runtime_cmd,
         "run_batch": bool(args.run_batch),
         "root": str(ROOT),

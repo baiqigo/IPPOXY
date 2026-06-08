@@ -197,10 +197,19 @@ def main() -> int:
     parser.add_argument("--skip-xray", action="store_true")
     parser.add_argument("--skip-resin", action="store_true")
     parser.add_argument("--skip-resin-configure", action="store_true")
+    parser.add_argument(
+        "--resin-force-replace",
+        action="store_true",
+        default=os.environ.get("RESIN_FORCE_REPLACE", "0").strip().lower() in ("1", "true", "yes", "on"),
+        help="Configure Resin in repair mode: do not preserve incremental alive nodes and shorten platform sticky TTLs.",
+    )
     parser.add_argument("--no-stop", action="store_true", help="Do not stop existing PID-file processes before start.")
     parser.add_argument("--report", type=Path, default=REPORT)
     args = parser.parse_args()
 
+    resin_configure_cmd = [sys.executable, "tools/ip_proxy_resin_configure.py"]
+    if args.resin_force_replace:
+        resin_configure_cmd.append("--force-replace")
     xray_bin = resolve_binary("XRAY_BIN", "xray")
     resin_bin = resolve_binary("RESIN_BIN", "resin")
     report = {
@@ -208,12 +217,13 @@ def main() -> int:
         "root": str(ROOT),
         "runtime": str(RUNTIME),
         "dry_run": bool(args.dry_run),
+        "resin_force_replace": bool(args.resin_force_replace),
         "binaries": {"xray": xray_bin, "resin": resin_bin},
         "commands": {
             "xray_test": [xray_bin["path"] or xray_bin["candidate"], "run", "-test", "-config", str(XRAY_CONF)],
             "xray_start": [xray_bin["path"] or xray_bin["candidate"], "run", "-config", str(XRAY_CONF)],
             "resin_start": [resin_bin["path"] or resin_bin["candidate"]],
-            "resin_configure": [sys.executable, "tools/ip_proxy_resin_configure.py"],
+            "resin_configure": resin_configure_cmd,
         },
         "steps": [],
     }
@@ -314,7 +324,7 @@ def main() -> int:
     if not args.skip_resin:
         checks["resin_health"] = wait_resin_health(timeout_s=45)
         if checks["resin_health"].get("ok") and not args.skip_resin_configure:
-            report["steps"].append(run([sys.executable, "tools/ip_proxy_resin_configure.py"], timeout=90))
+            report["steps"].append(run(resin_configure_cmd, timeout=90))
     report["checks"] = checks
     ok = all(value is True for key, value in checks.items() if key.startswith("xray_"))
     resin_health = checks.get("resin_health")
