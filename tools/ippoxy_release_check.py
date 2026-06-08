@@ -19,6 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_FILES = [
     "main.py",
     "outlook_flow_stats.py",
+    "mailhub_client.py",
+    "mailhub_import_tokens.py",
+    "mailhub_outlook_smoke.py",
     "challenge_providers/router.py",
     "challenge_providers/stubs.py",
     "tools/ip_proxy_registrar_feedback.py",
@@ -58,6 +61,9 @@ def check_imports() -> dict:
     modules = [
         "main",
         "outlook_flow_stats",
+        "mailhub_client",
+        "mailhub_import_tokens",
+        "mailhub_outlook_smoke",
         "tools.ip_proxy_registrar_feedback",
         "tools.ippoxy_sandbox_batch_verify",
         "tools.ip_proxy_pool_refresh",
@@ -426,6 +432,49 @@ print("ok")
     return run([sys.executable, "-c", script])
 
 
+def check_batch_verifier_diagnosis() -> dict:
+    script = r"""
+from tools.ippoxy_sandbox_batch_verify import batch_diagnosis
+
+ip_only = batch_diagnosis(
+    {"failure_reasons": {"entry_failed": 2, "rate_or_abnormal_after_profile": 1}},
+    {},
+    {"logged_email": 0, "outlook_token": 0},
+)
+assert ip_only["status"] == "ip_entry_blocked", ip_only
+assert ip_only["dominant_lane"] == "ip_entry", ip_only
+assert ip_only["needs_ip_refresh"] is True, ip_only
+assert ip_only["needs_program_fix"] is False, ip_only
+
+challenge = batch_diagnosis(
+    {"failure_reasons": {"challenge_failed_microsoft_press": 3, "entry_failed": 1}},
+    {},
+    {"logged_email": 0, "outlook_token": 0},
+)
+assert challenge["status"] == "challenge_blocked", challenge
+assert challenge["dominant_lane"] == "challenge", challenge
+assert challenge["needs_challenge_evidence_or_manual_fallback"] is True, challenge
+
+program = batch_diagnosis(
+    {"failure_reasons": {"flow_exception": 1, "entry_failed": 3}},
+    {},
+    {"logged_email": 0, "outlook_token": 0},
+)
+assert program["status"] == "program_failure_present", program
+assert program["needs_program_fix"] is True, program
+
+fallback = batch_diagnosis(
+    {},
+    {"failure_reasons": {"register_exception": 1}},
+    {"logged_email": 1, "outlook_token": 0},
+)
+assert fallback["status"] == "program_failure_present", fallback
+assert fallback["logged_email_delta"] == 1, fallback
+print("ok")
+"""
+    return run([sys.executable, "-c", script])
+
+
 def check_source_quality_pool_priority() -> dict:
     script = r"""
 from tools.ip_proxy_pool_refresh import normalize_row, prioritize_candidates
@@ -534,6 +583,9 @@ def main() -> int:
                 "py_compile",
                 "main.py",
                 "outlook_flow_stats.py",
+                "mailhub_client.py",
+                "mailhub_import_tokens.py",
+                "mailhub_outlook_smoke.py",
                 "challenge_providers/router.py",
                 "challenge_providers/stubs.py",
                 "tools/ip_proxy_registrar_feedback.py",
@@ -552,6 +604,7 @@ def main() -> int:
         "pool_refresh_retained_bad_guard": check_pool_refresh_retained_bad_guard(),
         "source_quality_summary": check_source_quality_summary(),
         "batch_verifier_source_quality_report": check_batch_verifier_source_quality_report(),
+        "batch_verifier_diagnosis": check_batch_verifier_diagnosis(),
         "source_quality_pool_priority": check_source_quality_pool_priority(),
         "pool_refresh_replaces_low_priority_baseline": check_pool_refresh_replaces_low_priority_baseline(),
         "candidate_harvest_source_priority": check_candidate_harvest_source_priority(),

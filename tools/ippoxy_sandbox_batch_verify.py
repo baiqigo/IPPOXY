@@ -23,6 +23,14 @@ IP_RUNTIME = ROOT / ".runtime/ip-proxy"
 SOURCE_QUALITY_JSON = IP_RUNTIME / "research/proxy_source_quality_latest.json"
 SOURCE_QUALITY_MD = IP_RUNTIME / "research/proxy_source_quality_latest.md"
 PROXY_CANDIDATE_CHECK = IP_RUNTIME / "research/proxy_candidate_check.latest.json"
+IP_FAILURE_REASONS = {"entry_failed", "proxy_precheck_bad_exit", "rate_or_abnormal_after_profile"}
+PROGRAM_FAILURE_REASONS = {
+    "flow_exception",
+    "register_exception",
+    "token_auth_failed",
+    "mailhub_import_failed",
+    "oauth_pending_not_ready",
+}
 
 
 def line_count(path: Path) -> int:
@@ -115,6 +123,73 @@ def compact_source_quality(data: object) -> dict:
     }
 
 
+def _as_int(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _failure_reasons(result_detail: object, flow_stats: object) -> dict[str, int]:
+    for source in (result_detail, flow_stats):
+        if not isinstance(source, dict):
+            continue
+        reasons = source.get("failure_reasons")
+        if isinstance(reasons, dict):
+            return {str(key): _as_int(value) for key, value in reasons.items() if _as_int(value) > 0}
+    return {}
+
+
+def batch_diagnosis(result_detail: object, flow_stats: object, count_delta: dict) -> dict:
+    reasons = _failure_reasons(result_detail, flow_stats)
+    challenge_reasons = {key: value for key, value in reasons.items() if key.startswith("challenge_failed_")}
+    ip_reasons = {key: value for key, value in reasons.items() if key in IP_FAILURE_REASONS}
+    program_reasons = {key: value for key, value in reasons.items() if key in PROGRAM_FAILURE_REASONS}
+    other_reasons = {
+        key: value
+        for key, value in reasons.items()
+        if key not in ip_reasons and key not in program_reasons and key not in challenge_reasons
+    }
+    lane_counts = {
+        "ip_entry": sum(ip_reasons.values()),
+        "challenge": sum(challenge_reasons.values()),
+        "program": sum(program_reasons.values()),
+        "other": sum(other_reasons.values()),
+    }
+    dominant_lane = "none"
+    if any(lane_counts.values()):
+        dominant_lane = max(lane_counts, key=lambda key: (lane_counts[key], key))
+        if lane_counts[dominant_lane] <= 0:
+            dominant_lane = "none"
+
+    token_delta = _as_int(count_delta.get("outlook_token")) if isinstance(count_delta, dict) else 0
+    logged_delta = _as_int(count_delta.get("logged_email")) if isinstance(count_delta, dict) else 0
+    status = "success_progress" if token_delta > 0 else "no_token_progress"
+    if program_reasons:
+        status = "program_failure_present"
+    elif dominant_lane == "ip_entry":
+        status = "ip_entry_blocked"
+    elif dominant_lane == "challenge":
+        status = "challenge_blocked"
+    elif dominant_lane == "other" and other_reasons:
+        status = "unclassified_failure_present"
+
+    return {
+        "status": status,
+        "dominant_lane": dominant_lane,
+        "lane_counts": lane_counts,
+        "ip_reasons": ip_reasons,
+        "challenge_reasons": challenge_reasons,
+        "program_reasons": program_reasons,
+        "other_reasons": other_reasons,
+        "token_delta": token_delta,
+        "logged_email_delta": logged_delta,
+        "needs_program_fix": bool(program_reasons),
+        "needs_ip_refresh": bool(ip_reasons) and lane_counts["ip_entry"] >= lane_counts["challenge"],
+        "needs_challenge_evidence_or_manual_fallback": bool(challenge_reasons),
+    }
+
+
 def tail_result_detail(log_path: Path) -> dict:
     if not log_path.exists():
         return {}
@@ -187,6 +262,9 @@ def main() -> int:
 
     after = result_counts()
     source_quality = load_json(SOURCE_QUALITY_JSON)
+    flow_stats = load_json(captures / "outlook_flow_stats_latest.json")
+    count_delta = {key: after.get(key, 0) - before.get(key, 0) for key in sorted(set(before) | set(after))}
+    result_detail = tail_result_detail(log_path)
     report = {
         "ok": True,
         "run_id": args.run_id,
@@ -195,14 +273,15 @@ def main() -> int:
         "ip_failure_retries": args.ip_failure_retries,
         "counts_before": before,
         "counts_after": after,
-        "count_delta": {key: after.get(key, 0) - before.get(key, 0) for key in sorted(set(before) | set(after))},
+        "count_delta": count_delta,
         "steps": steps,
-        "result_detail": tail_result_detail(log_path),
-        "flow_stats": load_json(captures / "outlook_flow_stats_latest.json"),
+        "result_detail": result_detail,
+        "flow_stats": flow_stats,
         "registrar_feedback": load_json(captures / "ip_registrar_feedback_latest.json"),
         "pool_refresh": load_json(captures / "ip_pool_refresh_latest.json"),
         "source_quality": source_quality,
         "source_quality_summary": compact_source_quality(source_quality),
+        "batch_diagnosis": batch_diagnosis(result_detail, flow_stats, count_delta),
         "artifacts": {
             "flow_stats": file_artifact(captures / "outlook_flow_stats_latest.json"),
             "registrar_feedback": file_artifact(captures / "ip_registrar_feedback_latest.json"),
