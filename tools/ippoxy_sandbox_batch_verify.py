@@ -19,6 +19,10 @@ RESULT_FILES = {
     "outlook_token": ROOT / "Results/outlook_token.txt",
     "unlogged_email": ROOT / "Results/unlogged_email.txt",
 }
+IP_RUNTIME = ROOT / ".runtime/ip-proxy"
+SOURCE_QUALITY_JSON = IP_RUNTIME / "research/proxy_source_quality_latest.json"
+SOURCE_QUALITY_MD = IP_RUNTIME / "research/proxy_source_quality_latest.md"
+PROXY_CANDIDATE_CHECK = IP_RUNTIME / "research/proxy_candidate_check.latest.json"
 
 
 def line_count(path: Path) -> int:
@@ -64,6 +68,51 @@ def load_json(path: Path) -> object:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         return {"error": f"json_decode_failed: {exc}", "path": str(path)}
+
+
+def file_artifact(path: Path) -> dict:
+    return {
+        "path": str(path),
+        "exists": path.exists(),
+        "size": path.stat().st_size if path.exists() else 0,
+    }
+
+
+def compact_source_quality(data: object) -> dict:
+    if not isinstance(data, dict):
+        return {}
+    by_source = data.get("by_source") if isinstance(data.get("by_source"), dict) else {}
+    cooldown_sources = data.get("cooldown_sources") if isinstance(data.get("cooldown_sources"), dict) else {}
+    top_names = data.get("top_sources_by_clean") if isinstance(data.get("top_sources_by_clean"), list) else []
+    top_details = []
+    for source in top_names[:5]:
+        item = by_source.get(str(source), {})
+        if not isinstance(item, dict):
+            item = {}
+        top_details.append(
+            {
+                "source": str(source),
+                "total": item.get("total", 0),
+                "success": item.get("success", 0),
+                "clean": item.get("clean", 0),
+                "success_rate_pct": item.get("success_rate_pct", 0),
+                "clean_rate_pct": item.get("clean_rate_pct", 0),
+                "cooldown_recommended": bool(item.get("cooldown_recommended")),
+                "cooldown_reason": item.get("cooldown_reason", ""),
+            }
+        )
+    return {
+        "total": data.get("total", 0),
+        "success": data.get("success", 0),
+        "clean": data.get("clean", 0),
+        "source_count": data.get("source_count", len(by_source)),
+        "by_kind": data.get("by_kind", {}),
+        "top_sources_by_clean": top_names[:8],
+        "top_source_details": top_details,
+        "cooldown_source_count": len(cooldown_sources),
+        "cooldown_sources": cooldown_sources,
+        "cooldown_policy": data.get("cooldown_policy", {}),
+    }
 
 
 def tail_result_detail(log_path: Path) -> dict:
@@ -137,6 +186,7 @@ def main() -> int:
         steps.append(run(cmd, env=env, log_path=step_log, check=cmd != batch_cmd))
 
     after = result_counts()
+    source_quality = load_json(SOURCE_QUALITY_JSON)
     report = {
         "ok": True,
         "run_id": args.run_id,
@@ -151,6 +201,16 @@ def main() -> int:
         "flow_stats": load_json(captures / "outlook_flow_stats_latest.json"),
         "registrar_feedback": load_json(captures / "ip_registrar_feedback_latest.json"),
         "pool_refresh": load_json(captures / "ip_pool_refresh_latest.json"),
+        "source_quality": source_quality,
+        "source_quality_summary": compact_source_quality(source_quality),
+        "artifacts": {
+            "flow_stats": file_artifact(captures / "outlook_flow_stats_latest.json"),
+            "registrar_feedback": file_artifact(captures / "ip_registrar_feedback_latest.json"),
+            "pool_refresh": file_artifact(captures / "ip_pool_refresh_latest.json"),
+            "source_quality_json": file_artifact(SOURCE_QUALITY_JSON),
+            "source_quality_markdown": file_artifact(SOURCE_QUALITY_MD),
+            "proxy_candidate_check": file_artifact(PROXY_CANDIDATE_CHECK),
+        },
     }
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")

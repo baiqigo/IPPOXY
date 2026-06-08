@@ -372,6 +372,60 @@ print("ok")
     return run([sys.executable, "-c", script])
 
 
+def check_batch_verifier_source_quality_report() -> dict:
+    script = r"""
+from tools.ippoxy_sandbox_batch_verify import compact_source_quality
+
+report = {
+    "total": 5,
+    "success": 2,
+    "clean": 1,
+    "source_count": 2,
+    "by_kind": {"turn": 4, "socks5": 1},
+    "top_sources_by_clean": ["source_a", "source_b"],
+    "cooldown_policy": {"min_total": 2},
+    "cooldown_sources": {
+        "source_b": {
+            "reason": "no_clean_candidates",
+            "total": 3,
+            "success_rate_pct": 0.0,
+            "clean_rate_pct": 0.0,
+        }
+    },
+    "by_source": {
+        "source_a": {
+            "total": 2,
+            "success": 2,
+            "clean": 1,
+            "success_rate_pct": 100.0,
+            "clean_rate_pct": 50.0,
+        },
+        "source_b": {
+            "total": 3,
+            "success": 0,
+            "clean": 0,
+            "success_rate_pct": 0.0,
+            "clean_rate_pct": 0.0,
+            "cooldown_recommended": True,
+            "cooldown_reason": "no_clean_candidates",
+        },
+    },
+}
+summary = compact_source_quality(report)
+assert summary["total"] == 5, summary
+assert summary["source_count"] == 2, summary
+assert summary["by_kind"]["turn"] == 4, summary
+assert summary["top_sources_by_clean"] == ["source_a", "source_b"], summary
+assert summary["top_source_details"][1]["source"] == "source_b", summary
+assert summary["top_source_details"][1]["cooldown_recommended"] is True, summary
+assert summary["cooldown_source_count"] == 1, summary
+assert summary["cooldown_sources"]["source_b"]["reason"] == "no_clean_candidates", summary
+assert compact_source_quality([]) == {}, summary
+print("ok")
+"""
+    return run([sys.executable, "-c", script])
+
+
 def check_source_quality_pool_priority() -> dict:
     script = r"""
 from tools.ip_proxy_pool_refresh import normalize_row, prioritize_candidates
@@ -497,6 +551,7 @@ def main() -> int:
         "registrar_feedback_diagnostics": check_registrar_feedback_diagnostics(),
         "pool_refresh_retained_bad_guard": check_pool_refresh_retained_bad_guard(),
         "source_quality_summary": check_source_quality_summary(),
+        "batch_verifier_source_quality_report": check_batch_verifier_source_quality_report(),
         "source_quality_pool_priority": check_source_quality_pool_priority(),
         "pool_refresh_replaces_low_priority_baseline": check_pool_refresh_replaces_low_priority_baseline(),
         "candidate_harvest_source_priority": check_candidate_harvest_source_priority(),
