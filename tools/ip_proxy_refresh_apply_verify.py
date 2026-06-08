@@ -59,6 +59,35 @@ def skipped_step(name: str, reason: str) -> dict:
     return {"cmd": [], "name": name, "status": "skipped", "reason": reason, "ok": True}
 
 
+def resolve_runtime_binary(env_name: str, default_name: str) -> dict:
+    configured = os.environ.get(env_name, "").strip()
+    candidate = configured or default_name
+    path = shutil.which(candidate) or (candidate if Path(candidate).exists() else "")
+    return {
+        "env": env_name,
+        "configured": configured,
+        "candidate": candidate,
+        "path": path,
+        "exists": bool(path),
+    }
+
+
+def native_runtime_preflight() -> dict:
+    binaries = {
+        "xray": resolve_runtime_binary("XRAY_BIN", "xray"),
+        "resin": resolve_runtime_binary("RESIN_BIN", "resin"),
+    }
+    missing = [item["env"] for item in binaries.values() if not item["exists"]]
+    return {
+        "cmd": [],
+        "name": "native_runtime_preflight",
+        "status": "ok" if not missing else "missing_binaries",
+        "ok": not missing,
+        "binaries": binaries,
+        "missing_binaries": missing,
+    }
+
+
 def load_json(path: Path) -> object:
     if not path.exists():
         return {}
@@ -218,6 +247,16 @@ def main() -> int:
         write_report(report, args.report)
         print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
         return 0 if report["steps"][-1]["ok"] else 1
+
+    if args.runtime_runner == "native":
+        preflight = native_runtime_preflight()
+        report["steps"].append(preflight)
+        if not preflight["ok"]:
+            report["status"] = "native_runtime_preflight_failed"
+            report["runtime_files_after"] = [file_artifact(path) for path in RUNTIME_FILES]
+            write_report(report, args.report)
+            print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+            return 2
 
     report["backup"] = backup_runtime_files(backup_dir)
     try:

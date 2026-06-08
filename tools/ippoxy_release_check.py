@@ -637,6 +637,53 @@ print("ok")
     return run([sys.executable, "-c", script])
 
 
+def check_refresh_apply_verify_native_preflight_blocks() -> dict:
+    script = r"""
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+root = Path(tempfile.mkdtemp(prefix="ippoxy_refresh_native_preflight_"))
+runtime = root / ".runtime/ip-proxy"
+report = root / "refresh_report.json"
+env = os.environ.copy()
+env["IP_PROXY_RUNTIME_DIR"] = str(runtime)
+env["XRAY_BIN"] = str(root / "missing-xray")
+env["RESIN_BIN"] = str(root / "missing-resin")
+proc = subprocess.run(
+    [
+        sys.executable,
+        "tools/ip_proxy_refresh_apply_verify.py",
+        "--apply",
+        "--runtime-runner",
+        "native",
+        "--report",
+        str(report),
+    ],
+    cwd=Path.cwd(),
+    env=env,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+)
+assert proc.returncode == 2, proc.stdout[-1000:]
+data = json.loads(report.read_text(encoding="utf-8"))
+assert data["status"] == "native_runtime_preflight_failed", data
+assert data["apply"] is True, data
+assert data["runtime_runner"] == "native", data
+assert "backup" not in data, data
+assert len(data["steps"]) == 1, data
+assert data["steps"][0]["name"] == "native_runtime_preflight", data
+assert data["steps"][0]["missing_binaries"] == ["XRAY_BIN", "RESIN_BIN"], data
+assert all(not item["exists"] for item in data["runtime_files_after"]), data
+print("ok")
+"""
+    return run([sys.executable, "-c", script])
+
+
 def check_runtime_up_native_dry_run() -> dict:
     script = r"""
 import json
@@ -788,6 +835,7 @@ def main() -> int:
         "pool_refresh_replaces_low_priority_baseline": check_pool_refresh_replaces_low_priority_baseline(),
         "refresh_apply_verify_wrapper": check_refresh_apply_verify_wrapper(),
         "refresh_apply_verify_post_batch_dry_run": check_refresh_apply_verify_post_batch_dry_run(),
+        "refresh_apply_verify_native_preflight_blocks": check_refresh_apply_verify_native_preflight_blocks(),
         "runtime_up_native_dry_run": check_runtime_up_native_dry_run(),
         "batch_verifier_native_dry_run": check_batch_verifier_native_dry_run(),
         "candidate_harvest_source_priority": check_candidate_harvest_source_priority(),
