@@ -41,6 +41,19 @@ def classify(item: dict) -> str:
     return "static"
 
 
+def pool_priority(item: dict) -> int:
+    company_type = (item.get("company_type") or "").lower()
+    asn_type = (item.get("asn_type") or "").lower()
+    type_text = f"{company_type} {asn_type}"
+    if company_type == "isp" and asn_type == "isp":
+        return 0
+    if "isp" in {company_type, asn_type}:
+        return 1
+    if any(word in type_text for word in ["hosting", "datacenter", "data center", "cdn", "cloud"]):
+        return 3
+    return 2
+
+
 def make_tag(item: dict) -> str:
     bucket = classify(item)
     country = slug(item.get("country") or "xx")
@@ -182,6 +195,7 @@ def load_source_quality(path: Path) -> tuple[dict[str, dict], dict]:
 def source_quality_sort_key(item: dict, source_quality: dict[str, dict] | None) -> tuple:
     quality = (source_quality or {}).get(str(item.get("source") or "unknown"), {})
     return (
+        pool_priority(item),
         -safe_int(quality.get("clean")),
         -safe_float(quality.get("clean_rate_pct")),
         -safe_int(quality.get("success")),
@@ -251,7 +265,10 @@ def normalize_row(item: dict, port: int, worker_host: str, uuid: str, source: st
     row["clean"] = True
     row["success"] = True
     row["source"] = source
+    row["selection_source"] = source
+    row["upstream_source"] = item.get("source")
     row["pool_class"] = classify(row)
+    row["pool_priority"] = pool_priority(row)
     row["tag"] = row.get("tag") or make_tag(row)
     row["worker_path"] = f"/{raw}?ed=2560"
     row["vless"] = vless_url(uuid, worker_host, raw)

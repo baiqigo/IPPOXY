@@ -368,21 +368,29 @@ print("ok")
 
 def check_source_quality_pool_priority() -> dict:
     script = r"""
-from tools.ip_proxy_pool_refresh import prioritize_candidates
+from tools.ip_proxy_pool_refresh import normalize_row, prioritize_candidates
 
 candidates = [
-    {"source": "weak_source", "kind": "turn", "success": True, "clean": True, "exit_ip": "10.0.0.1", "raw": "turn://weak", "responseTime": 1},
-    {"source": "strong_source", "kind": "turn", "success": True, "clean": True, "exit_ip": "10.0.0.2", "raw": "turn://strong", "responseTime": 999},
+    {"source": "weak_source", "kind": "turn", "success": True, "clean": True, "exit_ip": "10.0.0.1", "raw": "turn://weak", "responseTime": 1, "company_type": "ISP", "asn_type": "ISP"},
+    {"source": "strong_source", "kind": "turn", "success": True, "clean": True, "exit_ip": "10.0.0.2", "raw": "turn://strong", "responseTime": 999, "company_type": "ISP", "asn_type": "ISP"},
+    {"source": "hosting_source", "kind": "turn", "success": True, "clean": True, "exit_ip": "10.0.0.3", "raw": "turn://hosting", "responseTime": 0, "company_type": "hosting", "asn_type": "hosting"},
 ]
 source_quality = {
     "weak_source": {"total": 200, "success": 20, "clean": 1, "success_rate_pct": 10.0, "clean_rate_pct": 0.5},
     "strong_source": {"total": 200, "success": 180, "clean": 100, "success_rate_pct": 90.0, "clean_rate_pct": 50.0},
+    "hosting_source": {"total": 200, "success": 200, "clean": 200, "success_rate_pct": 100.0, "clean_rate_pct": 100.0},
 }
 prioritized = prioritize_candidates(candidates, source_quality)
 assert prioritized[0]["source"] == "strong_source", prioritized
+assert prioritized[-1]["source"] == "hosting_source", prioritized
 assert prioritize_candidates(candidates, {})[0]["source"] == "weak_source", candidates
 malformed = {"weak_source": {"clean": "not-a-number"}, "strong_source": {"clean": "2"}}
 assert prioritize_candidates(candidates, malformed)[0]["source"] == "strong_source", candidates
+row = normalize_row(candidates[0], 19080, "example.invalid", "2523c510-9ff0-415b-9582-93949bfae7e3", "clean_latest")
+assert row["source"] == "clean_latest", row
+assert row["selection_source"] == "clean_latest", row
+assert row["upstream_source"] == "weak_source", row
+assert row["pool_priority"] == 0, row
 print("ok")
 """
     return run([sys.executable, "-c", script])
