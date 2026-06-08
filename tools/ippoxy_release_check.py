@@ -100,6 +100,10 @@ from pathlib import Path
 
 root = Path(tempfile.mkdtemp(prefix="ippoxy_flow_stats_"))
 os.environ["OUTLOOK_IP_FAILURE_RETRIES"] = "0"
+os.environ["OUTLOOK_IP_RETRY_DELAY_MIN_S"] = "0"
+os.environ["OUTLOOK_IP_RETRY_DELAY_MAX_S"] = "0"
+os.environ["OUTLOOK_TASK_SUBMIT_DELAY_MIN_S"] = "0"
+os.environ["OUTLOOK_TASK_SUBMIT_DELAY_MAX_S"] = "0"
 os.environ["OUTLOOK_PROXY_PRECHECK"] = "0"
 os.environ["OUTLOOK_FLOW_STATS_DIR"] = str(root)
 
@@ -135,6 +139,60 @@ with redirect_stdout(buf):
 line = [line for line in buf.getvalue().splitlines() if line.startswith("[ResultDetail] - ")][-1]
 summary = json.loads(line.split(" - ", 1)[1])
 assert summary["failure_reasons"]["entry_failed"] == 1, summary
+print("ok")
+"""
+    return run([sys.executable, "-c", script])
+
+
+def check_flow_throttle_zero_delay() -> dict:
+    script = r"""
+import io
+import json
+import os
+import tempfile
+from contextlib import redirect_stdout
+from pathlib import Path
+
+root = Path(tempfile.mkdtemp(prefix="ippoxy_flow_throttle_"))
+os.environ["OUTLOOK_IP_FAILURE_RETRIES"] = "1"
+os.environ["OUTLOOK_IP_RETRY_DELAY_MIN_S"] = "0"
+os.environ["OUTLOOK_IP_RETRY_DELAY_MAX_S"] = "0"
+os.environ["OUTLOOK_TASK_SUBMIT_DELAY_MIN_S"] = "0"
+os.environ["OUTLOOK_TASK_SUBMIT_DELAY_MAX_S"] = "0"
+os.environ["OUTLOOK_PROXY_PRECHECK"] = "0"
+os.environ["OUTLOOK_FLOW_STATS_DIR"] = str(root)
+
+import main
+
+class FakeController:
+    email_suffix = "@hotmail.com"
+    enable_oauth2 = False
+    oauth2_client_id = "client"
+    def __init__(self):
+        self.failure = {"reason": "", "details": {}}
+    def begin_flow_proxy_identity(self):
+        pass
+    def reset_flow_failure(self):
+        self.failure = {"reason": "", "details": {}}
+    def get_thread_page(self):
+        return object()
+    def thread_proxy_url(self):
+        return "http://IPPOXY_RES.throttle-check:daytona@127.0.0.1:2260"
+    def outlook_register(self, page, email, password):
+        self.failure = {"reason": "entry_failed", "details": {"stage": "entry"}}
+        return False
+    def get_flow_failure(self):
+        return self.failure
+    def clean_up(self, page=None, type="all_browser"):
+        pass
+
+buf = io.StringIO()
+with redirect_stdout(buf):
+    main.run_concurrent_flows(FakeController(), concurrent_flows=1, max_tasks=2)
+line = [line for line in buf.getvalue().splitlines() if line.startswith("[ResultDetail] - ")][-1]
+summary = json.loads(line.split(" - ", 1)[1])
+assert summary["registration_attempts"] == 4, summary
+assert summary["failure_reasons"]["entry_failed"] == 4, summary
 print("ok")
 """
     return run([sys.executable, "-c", script])
@@ -209,6 +267,7 @@ def main() -> int:
         "imports": check_imports(),
         "router_without_optional_providers": check_router_without_optional_providers(),
         "fake_flow_summary": check_fake_flow_summary(),
+        "flow_throttle_zero_delay": check_flow_throttle_zero_delay(),
         "registrar_feedback_diagnostics": check_registrar_feedback_diagnostics(),
     }
     if args.skip_docker or shutil.which("docker") is None:

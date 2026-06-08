@@ -1,4 +1,5 @@
 import os
+import random
 import time
 import json
 from get_token import get_access_token
@@ -26,6 +27,29 @@ def get_ip_failure_retries():
         print(f"[Warn: Config] - invalid OUTLOOK_IP_FAILURE_RETRIES={raw!r}; using 1", flush=True)
         return 1
     return max(0, value)
+
+
+def get_float_env(name, default):
+    raw = os.environ.get(name, str(default)).strip()
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"[Warn: Config] - invalid {name}={raw!r}; using {default}", flush=True)
+        return float(default)
+
+
+def sleep_random_delay(label, min_env, max_env, default_min, default_max):
+    min_s = max(0.0, get_float_env(min_env, default_min))
+    max_s = max(0.0, get_float_env(max_env, default_max))
+    if max_s <= 0:
+        return
+    if max_s < min_s:
+        min_s, max_s = max_s, min_s
+    delay_s = random.uniform(min_s, max_s)
+    if delay_s <= 0:
+        return
+    print(f"[FlowThrottle] - {label} delay_s={delay_s:.1f}", flush=True)
+    time.sleep(delay_s)
 
 
 def run_registration_attempt(controller, attempt_index, total_attempts):
@@ -142,6 +166,13 @@ def process_single_flow(controller):
             )
             controller.clean_up(page, "done_browser")
             page = None
+            sleep_random_delay(
+                "retry_after_ip_entry_failure",
+                "OUTLOOK_IP_RETRY_DELAY_MIN_S",
+                "OUTLOOK_IP_RETRY_DELAY_MAX_S",
+                6,
+                18,
+            )
 
         full_email = f"{email}{controller.email_suffix}" if email else ""
         if result and not controller.enable_oauth2:
@@ -295,6 +326,14 @@ def run_concurrent_flows(controller, concurrent_flows=10, max_tasks=100):
                 running_futures.remove(future)
 
             while len(running_futures) < concurrent_flows and task_counter < max_tasks:
+                if task_counter > 0:
+                    sleep_random_delay(
+                        "before_next_task_submit",
+                        "OUTLOOK_TASK_SUBMIT_DELAY_MIN_S",
+                        "OUTLOOK_TASK_SUBMIT_DELAY_MAX_S",
+                        3,
+                        8,
+                    )
                 new_future = executor.submit(process_single_flow, controller)
                 running_futures.add(new_future)
                 task_counter += 1
