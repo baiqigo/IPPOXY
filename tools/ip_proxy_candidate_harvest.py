@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 IP_RUNTIME_DIR = Path(os.environ.get("IP_PROXY_RUNTIME_DIR", ROOT / ".runtime/ip-proxy"))
 RUNTIME_DIR = IP_RUNTIME_DIR / "research"
 RESIN_DIR = IP_RUNTIME_DIR / "resin"
+DEFAULT_SOURCE_QUALITY = RUNTIME_DIR / "proxy_source_quality_latest.json"
 SOURCES = {
     "cmliussss_vpngate": "https://sub.cmliussss.net/vpngate",
     "delta_vpn_gate": "https://raw.githubusercontent.com/Delta-Kronecker/Vpn-Gate/refs/heads/main/sstp_hosts.txt",
@@ -229,6 +230,36 @@ def write_json(path: Path, data: object) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def read_json(path: Path, default: object) -> object:
+    if not path.exists():
+        return default
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def safe_int(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def safe_float(value: object) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def load_source_quality(path: Path) -> dict[str, dict]:
+    data = read_json(path, {})
+    if not isinstance(data, dict):
+        return {}
+    by_source = data.get("by_source")
+    if not isinstance(by_source, dict):
+        return {}
+    return {str(source): item for source, item in by_source.items() if isinstance(item, dict)}
+
+
 def run_date(run_id: str) -> str:
     return run_id[:8] if len(run_id) >= 8 and run_id[:8].isdigit() else time.strftime("%Y%m%d")
 
@@ -241,6 +272,33 @@ def display_date(run_id: str) -> str:
 def extract_port(raw: str) -> int | None:
     m = re.search(r":(\d+)(?:[/?#]|$)", raw)
     return int(m.group(1)) if m else None
+
+
+def kind_priority(item: dict) -> int:
+    kind = item.get("kind")
+    if kind == "turn":
+        return 0
+    if kind == "sstp" and item.get("port") == 443:
+        return 1
+    if kind == "sstp":
+        return 2
+    return 3
+
+
+def candidate_sort_key(item: dict, source_quality: dict[str, dict] | None = None) -> tuple:
+    quality = (source_quality or {}).get(str(item.get("source") or "unknown"), {})
+    return (
+        kind_priority(item),
+        -safe_int(quality.get("clean")),
+        -safe_float(quality.get("clean_rate_pct")),
+        -safe_int(quality.get("success")),
+        -safe_float(quality.get("success_rate_pct")),
+        item.get("raw") or "",
+    )
+
+
+def prioritize_candidates(candidates: list[dict], source_quality: dict[str, dict] | None = None) -> list[dict]:
+    return sorted(candidates, key=lambda item: candidate_sort_key(item, source_quality))
 
 
 def check_candidate(item: dict, timeout: int) -> dict:
@@ -369,17 +427,14 @@ def main() -> int:
     parser.add_argument("--max-socks-per-source", type=int, default=200)
     parser.add_argument("--max-check", type=int, default=0, help="limit checked candidates after sorting; 0 means all")
     parser.add_argument("--run-id", default="", help="stable run id for timestamped outputs")
+    parser.add_argument("--source-quality", type=Path, default=DEFAULT_SOURCE_QUALITY)
     args = parser.parse_args()
     run_id = args.run_id or time.strftime("%Y%m%d_%H%M%S")
 
     load_candidates.max_socks_per_source = args.max_socks_per_source
     candidates = load_candidates()
-    candidates.sort(
-        key=lambda x: (
-            0 if x["kind"] == "turn" else 1 if x["kind"] == "sstp" and x.get("port") == 443 else 2 if x["kind"] == "sstp" else 3,
-            x["raw"],
-        )
-    )
+    source_quality = load_source_quality(args.source_quality)
+    candidates = prioritize_candidates(candidates, source_quality)
     if args.harvest_only:
         RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         write_json(RUNTIME_DIR / f"proxy_candidate_pool_{run_id}.json", candidates)
