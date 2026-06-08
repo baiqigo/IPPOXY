@@ -854,7 +854,9 @@ many = [
 selected = select_check_candidates(many, max_check=3, max_per_source=2)
 assert [item["raw"] for item in selected] == ["turn://a0", "turn://a1", "turn://b0"], selected
 filled = select_check_candidates(many[:2], max_check=3, max_per_source=1)
-assert [item["raw"] for item in filled] == ["turn://a0", "turn://a1"], filled
+assert [item["raw"] for item in filled] == ["turn://a0"], filled
+relaxed = select_check_candidates(many[:2], max_check=3, max_per_source=1, relax_source_cap=True)
+assert [item["raw"] for item in relaxed] == ["turn://a0", "turn://a1"], relaxed
 print("ok")
 """
     return run([sys.executable, "-c", script])
