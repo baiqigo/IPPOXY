@@ -429,7 +429,7 @@ print("ok")
 
 def check_candidate_harvest_source_priority() -> dict:
     script = r"""
-from tools.ip_proxy_candidate_harvest import prioritize_candidates
+from tools.ip_proxy_candidate_harvest import prioritize_candidates, select_check_candidates
 
 candidates = [
     {"source": "weak_turn", "kind": "turn", "raw": "turn://aaa"},
@@ -444,6 +444,17 @@ source_quality = {
 prioritized = prioritize_candidates(candidates, source_quality)
 assert [item["source"] for item in prioritized] == ["strong_turn", "weak_turn", "strong_socks"], prioritized
 assert [item["source"] for item in prioritize_candidates(candidates, {})] == ["weak_turn", "strong_turn", "strong_socks"], candidates
+
+many = [
+    {"source": "source_a", "kind": "turn", "raw": f"turn://a{i}"}
+    for i in range(4)
+] + [
+    {"source": "source_b", "kind": "turn", "raw": "turn://b0"},
+]
+selected = select_check_candidates(many, max_check=3, max_per_source=2)
+assert [item["raw"] for item in selected] == ["turn://a0", "turn://a1", "turn://b0"], selected
+filled = select_check_candidates(many[:2], max_check=3, max_per_source=1)
+assert [item["raw"] for item in filled] == ["turn://a0", "turn://a1"], filled
 print("ok")
 """
     return run([sys.executable, "-c", script])

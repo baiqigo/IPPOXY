@@ -8,6 +8,7 @@ RUN_ID="${RUN_ID:-$(date -u +%Y%m%d_%H%M%S)}"
 WORKERS="${WORKERS:-10}"
 TIMEOUT="${TIMEOUT:-12}"
 MAX_CHECK="${MAX_CHECK:-240}"
+MAX_CHECK_PER_SOURCE="${MAX_CHECK_PER_SOURCE:-80}"
 MAX_SOCKS_PER_SOURCE="${MAX_SOCKS_PER_SOURCE:-200}"
 WITH_GROK="${WITH_GROK:-0}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -27,6 +28,7 @@ fi
   --workers "$WORKERS" \
   --timeout "$TIMEOUT" \
   --max-check "$MAX_CHECK" \
+  --max-check-per-source "$MAX_CHECK_PER_SOURCE" \
   --max-socks-per-source "$MAX_SOCKS_PER_SOURCE"
 
 "$PYTHON_BIN" tools/ip_proxy_classify_clean.py \

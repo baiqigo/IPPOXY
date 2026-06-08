@@ -301,6 +301,35 @@ def prioritize_candidates(candidates: list[dict], source_quality: dict[str, dict
     return sorted(candidates, key=lambda item: candidate_sort_key(item, source_quality))
 
 
+def select_check_candidates(candidates: list[dict], max_check: int, max_per_source: int = 0) -> list[dict]:
+    if max_check <= 0:
+        return candidates
+    if max_per_source <= 0:
+        return candidates[:max_check]
+
+    selected: list[dict] = []
+    selected_ids: set[int] = set()
+    per_source: dict[str, int] = {}
+
+    for item in candidates:
+        source = str(item.get("source") or "unknown")
+        if per_source.get(source, 0) >= max_per_source:
+            continue
+        selected.append(item)
+        selected_ids.add(id(item))
+        per_source[source] = per_source.get(source, 0) + 1
+        if len(selected) >= max_check:
+            return selected
+
+    for item in candidates:
+        if id(item) in selected_ids:
+            continue
+        selected.append(item)
+        if len(selected) >= max_check:
+            break
+    return selected
+
+
 def check_candidate(item: dict, timeout: int) -> dict:
     proxy = item["raw"]
     url = "https://check.socks5.cmliussss.net/check?proxy=" + urllib.parse.quote(proxy, safe="")
@@ -426,6 +455,7 @@ def main() -> int:
     parser.add_argument("--harvest-only", action="store_true")
     parser.add_argument("--max-socks-per-source", type=int, default=200)
     parser.add_argument("--max-check", type=int, default=0, help="limit checked candidates after sorting; 0 means all")
+    parser.add_argument("--max-check-per-source", type=int, default=int(os.environ.get("IP_PROXY_MAX_CHECK_PER_SOURCE", "0")))
     parser.add_argument("--run-id", default="", help="stable run id for timestamped outputs")
     parser.add_argument("--source-quality", type=Path, default=DEFAULT_SOURCE_QUALITY)
     args = parser.parse_args()
@@ -444,8 +474,7 @@ def main() -> int:
             summary[item["kind"]] = summary.get(item["kind"], 0) + 1
         print(json.dumps({"run_id": run_id, "candidates": len(candidates), "by_kind": summary}, ensure_ascii=False))
         return 0
-    if args.max_check > 0:
-        candidates = candidates[: args.max_check]
+    candidates = select_check_candidates(candidates, args.max_check, args.max_check_per_source)
     results: list[dict] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = [executor.submit(check_candidate, item, args.timeout) for item in candidates]
