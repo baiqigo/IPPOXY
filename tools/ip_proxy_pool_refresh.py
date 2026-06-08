@@ -23,6 +23,7 @@ DEFAULT_INPUT = RUNTIME_RESIN_DIR / "clean_candidates_classified.latest.json"
 DEFAULT_BASELINE = DOC_RUNTIME_DIR / "turn_xray_pool_20260608.json"
 DEFAULT_VERIFY = ROOT / "captures/ip_runtime_verify_latest.json"
 DEFAULT_REGISTRAR_FEEDBACK = ROOT / "captures/ip_registrar_feedback_latest.json"
+DEFAULT_SOURCE_QUALITY = RUNTIME / "research/proxy_source_quality_latest.json"
 DEFAULT_WORKER_HOST = "ip-proxy-turn-poc.khowk1isgv.workers.dev"
 DEFAULT_UUID = "2523c510-9ff0-415b-9582-93949bfae7e3"
 
@@ -119,6 +120,20 @@ def read_json(path: Path, default: object) -> object:
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
+def safe_int(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def safe_float(value: object) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def file_sha(path: Path) -> str | None:
     if not path.exists():
         return None
@@ -153,8 +168,41 @@ def clean_turn_candidates(path: Path) -> list[dict]:
     return out
 
 
-def resolve_candidate_input(path: Path, min_clean: int) -> tuple[Path, list[dict], str | None]:
-    candidates = clean_turn_candidates(path)
+def load_source_quality(path: Path) -> tuple[dict[str, dict], dict]:
+    data = read_json(path, {})
+    if not isinstance(data, dict):
+        return {}, {"path": str(path), "loaded": False, "reason": "invalid_json_shape"}
+    by_source = data.get("by_source")
+    if not isinstance(by_source, dict):
+        return {}, {"path": str(path), "loaded": False, "reason": "missing_by_source"}
+    quality = {str(source): item for source, item in by_source.items() if isinstance(item, dict)}
+    return quality, {"path": str(path), "loaded": bool(quality), "source_count": len(quality)}
+
+
+def source_quality_sort_key(item: dict, source_quality: dict[str, dict] | None) -> tuple:
+    quality = (source_quality or {}).get(str(item.get("source") or "unknown"), {})
+    return (
+        -safe_int(quality.get("clean")),
+        -safe_float(quality.get("clean_rate_pct")),
+        -safe_int(quality.get("success")),
+        -safe_float(quality.get("success_rate_pct")),
+        item.get("responseTime") or 999999,
+        item.get("raw") or "",
+    )
+
+
+def prioritize_candidates(candidates: list[dict], source_quality: dict[str, dict] | None) -> list[dict]:
+    if not source_quality:
+        return candidates
+    return sorted(candidates, key=lambda item: source_quality_sort_key(item, source_quality))
+
+
+def resolve_candidate_input(
+    path: Path,
+    min_clean: int,
+    source_quality: dict[str, dict] | None = None,
+) -> tuple[Path, list[dict], str | None]:
+    candidates = prioritize_candidates(clean_turn_candidates(path), source_quality)
     if len(candidates) >= min_clean:
         return path, candidates, None
 
@@ -166,7 +214,7 @@ def resolve_candidate_input(path: Path, min_clean: int) -> tuple[Path, list[dict
     for fallback in fallback_files:
         if fallback == path:
             continue
-        fallback_candidates = clean_turn_candidates(fallback)
+        fallback_candidates = prioritize_candidates(clean_turn_candidates(fallback), source_quality)
         if len(fallback_candidates) >= min_clean:
             return fallback, fallback_candidates, f"{path} only had {len(candidates)} clean TURN candidates"
     return path, candidates, None
@@ -331,6 +379,7 @@ def main() -> int:
     parser.add_argument("--baseline", type=Path, default=RUNTIME / "turn_xray_pool_20260608.json")
     parser.add_argument("--verify", type=Path, default=DEFAULT_VERIFY)
     parser.add_argument("--registrar-feedback", type=Path, default=DEFAULT_REGISTRAR_FEEDBACK)
+    parser.add_argument("--source-quality", type=Path, default=DEFAULT_SOURCE_QUALITY)
     parser.add_argument("--worker-host", default=DEFAULT_WORKER_HOST)
     parser.add_argument("--uuid", default=DEFAULT_UUID)
     parser.add_argument("--limit", type=int, default=int(os.environ.get("IP_PROXY_POOL_SIZE", "25")))
@@ -349,7 +398,8 @@ def main() -> int:
     baseline = read_json(baseline_path, [])
     if not isinstance(baseline, list):
         raise SystemExit(f"invalid baseline mapping: {baseline_path}")
-    input_path, candidates, fallback_reason = resolve_candidate_input(args.input, args.min_clean)
+    source_quality, source_quality_meta = load_source_quality(args.source_quality)
+    input_path, candidates, fallback_reason = resolve_candidate_input(args.input, args.min_clean, source_quality)
     if len(candidates) < args.min_clean:
         print(
             json.dumps(
@@ -387,6 +437,7 @@ def main() -> int:
             "requested_input": str(args.input),
             "verify": str(args.verify),
             "registrar_feedback": str(args.registrar_feedback),
+            "source_quality": source_quality_meta,
             "verify_bad_exit_ips": sorted(verify_failed),
             "registrar_bad_exit_ips": sorted(registrar_failed),
             "fallback_reason": fallback_reason,
@@ -409,6 +460,7 @@ def main() -> int:
         "requested_input": str(args.input),
         "verify": str(args.verify),
         "registrar_feedback": str(args.registrar_feedback),
+        "source_quality": source_quality_meta,
         "verify_bad_exit_ips": sorted(verify_failed),
         "registrar_bad_exit_ips": sorted(registrar_failed),
         "fallback_reason": fallback_reason,

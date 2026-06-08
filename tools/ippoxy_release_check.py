@@ -366,6 +366,28 @@ print("ok")
     return run([sys.executable, "-c", script])
 
 
+def check_source_quality_pool_priority() -> dict:
+    script = r"""
+from tools.ip_proxy_pool_refresh import prioritize_candidates
+
+candidates = [
+    {"source": "weak_source", "kind": "turn", "success": True, "clean": True, "exit_ip": "10.0.0.1", "raw": "turn://weak", "responseTime": 1},
+    {"source": "strong_source", "kind": "turn", "success": True, "clean": True, "exit_ip": "10.0.0.2", "raw": "turn://strong", "responseTime": 999},
+]
+source_quality = {
+    "weak_source": {"total": 200, "success": 20, "clean": 1, "success_rate_pct": 10.0, "clean_rate_pct": 0.5},
+    "strong_source": {"total": 200, "success": 180, "clean": 100, "success_rate_pct": 90.0, "clean_rate_pct": 50.0},
+}
+prioritized = prioritize_candidates(candidates, source_quality)
+assert prioritized[0]["source"] == "strong_source", prioritized
+assert prioritize_candidates(candidates, {})[0]["source"] == "weak_source", candidates
+malformed = {"weak_source": {"clean": "not-a-number"}, "strong_source": {"clean": "2"}}
+assert prioritize_candidates(candidates, malformed)[0]["source"] == "strong_source", candidates
+print("ok")
+"""
+    return run([sys.executable, "-c", script])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--skip-docker", action="store_true")
@@ -396,6 +418,7 @@ def main() -> int:
         "registrar_feedback_diagnostics": check_registrar_feedback_diagnostics(),
         "pool_refresh_retained_bad_guard": check_pool_refresh_retained_bad_guard(),
         "source_quality_summary": check_source_quality_summary(),
+        "source_quality_pool_priority": check_source_quality_pool_priority(),
     }
     if args.skip_docker or shutil.which("docker") is None:
         checks["docker_compose_config"] = {"ok": True, "skipped": True}
