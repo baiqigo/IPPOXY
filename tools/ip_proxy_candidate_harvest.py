@@ -19,6 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import Counter
 from pathlib import Path
 
 
@@ -260,6 +261,19 @@ def load_source_quality(path: Path) -> dict[str, dict]:
     return {str(source): item for source, item in by_source.items() if isinstance(item, dict)}
 
 
+def candidate_source(item: dict) -> str:
+    return str(item.get("source") or "unknown")
+
+
+def candidate_kind(item: dict) -> str:
+    return str(item.get("kind") or "unknown")
+
+
+def is_cooldown_source(item: dict, source_quality: dict[str, dict] | None = None) -> bool:
+    quality = (source_quality or {}).get(candidate_source(item), {})
+    return bool(quality.get("cooldown_recommended"))
+
+
 def run_date(run_id: str) -> str:
     return run_id[:8] if len(run_id) >= 8 and run_id[:8].isdigit() else time.strftime("%Y%m%d")
 
@@ -286,7 +300,7 @@ def kind_priority(item: dict) -> int:
 
 
 def candidate_sort_key(item: dict, source_quality: dict[str, dict] | None = None) -> tuple:
-    quality = (source_quality or {}).get(str(item.get("source") or "unknown"), {})
+    quality = (source_quality or {}).get(candidate_source(item), {})
     return (
         kind_priority(item),
         1 if quality.get("cooldown_recommended") else 0,
@@ -302,33 +316,184 @@ def prioritize_candidates(candidates: list[dict], source_quality: dict[str, dict
     return sorted(candidates, key=lambda item: candidate_sort_key(item, source_quality))
 
 
-def select_check_candidates(candidates: list[dict], max_check: int, max_per_source: int = 0) -> list[dict]:
-    if max_check <= 0:
-        return candidates
-    if max_per_source <= 0:
-        return candidates[:max_check]
+def ordered_candidate_kinds(candidates: list[dict]) -> list[str]:
+    kinds = {candidate_kind(item) for item in candidates}
+    return sorted(kinds, key=lambda kind: kind_priority({"kind": kind}))
+
+
+def round_robin_pick(
+    candidates: list[dict],
+    *,
+    selected: list[dict],
+    selected_ids: set[int],
+    per_source: dict[str, int],
+    per_kind: dict[str, int],
+    limit: int,
+    max_per_source: int = 0,
+    max_per_kind: int = 0,
+) -> None:
+    if len(selected) >= limit:
+        return
+
+    buckets: dict[str, list[dict]] = {}
+    cursors: dict[str, int] = {}
+    for item in candidates:
+        buckets.setdefault(candidate_kind(item), []).append(item)
+    for kind in buckets:
+        cursors[kind] = 0
+
+    kinds = ordered_candidate_kinds(candidates)
+    while len(selected) < limit:
+        progressed = False
+        for kind in kinds:
+            bucket = buckets.get(kind) or []
+            cursor = cursors.get(kind, 0)
+            while cursor < len(bucket):
+                item = bucket[cursor]
+                cursor += 1
+                if id(item) in selected_ids:
+                    continue
+                source = candidate_source(item)
+                if max_per_source > 0 and per_source.get(source, 0) >= max_per_source:
+                    continue
+                if max_per_kind > 0 and per_kind.get(kind, 0) >= max_per_kind:
+                    continue
+                selected.append(item)
+                selected_ids.add(id(item))
+                per_source[source] = per_source.get(source, 0) + 1
+                per_kind[kind] = per_kind.get(kind, 0) + 1
+                progressed = True
+                break
+            cursors[kind] = cursor
+            if len(selected) >= limit:
+                return
+        if not progressed:
+            return
+
+
+def select_check_candidates(
+    candidates: list[dict],
+    max_check: int,
+    max_per_source: int = 0,
+    source_quality: dict[str, dict] | None = None,
+    include_cooldown_sources: bool = False,
+    max_per_kind: int = 0,
+) -> list[dict]:
+    active = [
+        item
+        for item in candidates
+        if include_cooldown_sources or not is_cooldown_source(item, source_quality)
+    ]
+    limit = len(active) if max_check <= 0 else min(max_check, len(active))
+    if limit <= 0:
+        return []
 
     selected: list[dict] = []
     selected_ids: set[int] = set()
     per_source: dict[str, int] = {}
+    per_kind: dict[str, int] = {}
 
-    for item in candidates:
-        source = str(item.get("source") or "unknown")
-        if per_source.get(source, 0) >= max_per_source:
-            continue
-        selected.append(item)
-        selected_ids.add(id(item))
-        per_source[source] = per_source.get(source, 0) + 1
-        if len(selected) >= max_check:
-            return selected
+    auto_kind_cap = 0
+    if max_check > 0 and max_per_kind <= 0:
+        kind_count = max(1, len(ordered_candidate_kinds(active)))
+        auto_kind_cap = max(1, (limit + kind_count - 1) // kind_count)
 
-    for item in candidates:
-        if id(item) in selected_ids:
-            continue
-        selected.append(item)
-        if len(selected) >= max_check:
-            break
+    round_robin_pick(
+        active,
+        selected=selected,
+        selected_ids=selected_ids,
+        per_source=per_source,
+        per_kind=per_kind,
+        limit=limit,
+        max_per_source=max_per_source,
+        max_per_kind=max_per_kind or auto_kind_cap,
+    )
+    round_robin_pick(
+        active,
+        selected=selected,
+        selected_ids=selected_ids,
+        per_source=per_source,
+        per_kind=per_kind,
+        limit=limit,
+        max_per_source=max_per_source,
+        max_per_kind=max_per_kind,
+    )
     return selected
+
+
+def count_by(items: list[dict], field: str) -> dict[str, int]:
+    return dict(sorted(Counter(str(item.get(field) or "unknown") for item in items).items()))
+
+
+def selection_summary(
+    candidates: list[dict],
+    selected: list[dict],
+    *,
+    source_quality: dict[str, dict] | None = None,
+    include_cooldown_sources: bool = False,
+    max_check: int = 0,
+    max_per_source: int = 0,
+    max_per_kind: int = 0,
+) -> dict:
+    selected_ids = {id(item) for item in selected}
+    cooldown_candidates = [item for item in candidates if is_cooldown_source(item, source_quality)]
+    cooldown_sources: dict[str, dict] = {}
+    for source, quality in sorted((source_quality or {}).items()):
+        if not quality.get("cooldown_recommended"):
+            continue
+        source_candidates = [item for item in candidates if candidate_source(item) == source]
+        if not source_candidates:
+            continue
+        cooldown_sources[source] = {
+            "reason": quality.get("cooldown_reason"),
+            "candidates": len(source_candidates),
+            "selected": sum(1 for item in source_candidates if id(item) in selected_ids),
+            "clean": safe_int(quality.get("clean")),
+            "success": safe_int(quality.get("success")),
+            "total": safe_int(quality.get("total")),
+        }
+    return {
+        "candidates": len(candidates),
+        "selected": len(selected),
+        "max_check": max_check,
+        "max_check_per_source": max_per_source,
+        "max_check_per_kind": max_per_kind,
+        "include_cooldown_sources": include_cooldown_sources,
+        "skipped_cooldown_candidates": 0
+        if include_cooldown_sources
+        else sum(1 for item in cooldown_candidates if id(item) not in selected_ids),
+        "by_kind": count_by(candidates, "kind"),
+        "selected_by_kind": count_by(selected, "kind"),
+        "by_source": count_by(candidates, "source"),
+        "selected_by_source": count_by(selected, "source"),
+        "cooldown_sources": cooldown_sources,
+    }
+
+
+def write_selection_summary(
+    candidates: list[dict],
+    selected: list[dict],
+    run_id: str,
+    *,
+    source_quality: dict[str, dict] | None = None,
+    include_cooldown_sources: bool = False,
+    max_check: int = 0,
+    max_per_source: int = 0,
+    max_per_kind: int = 0,
+) -> dict:
+    summary = selection_summary(
+        candidates,
+        selected,
+        source_quality=source_quality,
+        include_cooldown_sources=include_cooldown_sources,
+        max_check=max_check,
+        max_per_source=max_per_source,
+        max_per_kind=max_per_kind,
+    )
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    write_json(RUNTIME_DIR / f"proxy_candidate_selection_{run_id}.json", summary)
+    write_json(RUNTIME_DIR / "proxy_candidate_selection.latest.json", summary)
+    return summary
 
 
 def check_candidate(item: dict, timeout: int) -> dict:
@@ -457,6 +622,17 @@ def main() -> int:
     parser.add_argument("--max-socks-per-source", type=int, default=200)
     parser.add_argument("--max-check", type=int, default=0, help="limit checked candidates after sorting; 0 means all")
     parser.add_argument("--max-check-per-source", type=int, default=int(os.environ.get("IP_PROXY_MAX_CHECK_PER_SOURCE", "0")))
+    parser.add_argument(
+        "--max-check-per-kind",
+        type=int,
+        default=int(os.environ.get("IP_PROXY_MAX_CHECK_PER_KIND", "0")),
+        help="cap checked candidates per kind; 0 auto-balances when --max-check is set",
+    )
+    parser.add_argument(
+        "--include-cooldown-sources",
+        action="store_true",
+        help="also check sources previously marked cooldown_recommended by source quality",
+    )
     parser.add_argument("--run-id", default="", help="stable run id for timestamped outputs")
     parser.add_argument("--source-quality", type=Path, default=DEFAULT_SOURCE_QUALITY)
     args = parser.parse_args()
@@ -470,12 +646,48 @@ def main() -> int:
         RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         write_json(RUNTIME_DIR / f"proxy_candidate_pool_{run_id}.json", candidates)
         write_json(RUNTIME_DIR / "proxy_candidate_pool.latest.json", candidates)
-        summary: dict[str, int] = {}
-        for item in candidates:
-            summary[item["kind"]] = summary.get(item["kind"], 0) + 1
-        print(json.dumps({"run_id": run_id, "candidates": len(candidates), "by_kind": summary}, ensure_ascii=False))
+        summary = write_selection_summary(
+            candidates,
+            [],
+            run_id,
+            source_quality=source_quality,
+            include_cooldown_sources=args.include_cooldown_sources,
+            max_check=args.max_check,
+            max_per_source=args.max_check_per_source,
+            max_per_kind=args.max_check_per_kind,
+        )
+        print(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "candidates": len(candidates),
+                    "by_kind": summary["by_kind"],
+                    "cooldown_sources": len(summary["cooldown_sources"]),
+                    "skipped_cooldown_candidates": summary["skipped_cooldown_candidates"],
+                },
+                ensure_ascii=False,
+            )
+        )
         return 0
-    candidates = select_check_candidates(candidates, args.max_check, args.max_check_per_source)
+    pool_candidates = candidates
+    candidates = select_check_candidates(
+        pool_candidates,
+        args.max_check,
+        args.max_check_per_source,
+        source_quality,
+        args.include_cooldown_sources,
+        args.max_check_per_kind,
+    )
+    selection = write_selection_summary(
+        pool_candidates,
+        candidates,
+        run_id,
+        source_quality=source_quality,
+        include_cooldown_sources=args.include_cooldown_sources,
+        max_check=args.max_check,
+        max_per_source=args.max_check_per_source,
+        max_per_kind=args.max_check_per_kind,
+    )
     results: list[dict] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = [executor.submit(check_candidate, item, args.timeout) for item in candidates]
@@ -483,7 +695,20 @@ def main() -> int:
             results.append(future.result())
     write_outputs(candidates, results, run_id)
     clean = sum(1 for r in results if r.get("clean"))
-    print(json.dumps({"run_id": run_id, "candidates": len(candidates), "checked": len(results), "clean": clean}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "candidates": len(pool_candidates),
+                "selected": len(candidates),
+                "checked": len(results),
+                "clean": clean,
+                "selected_by_kind": selection["selected_by_kind"],
+                "skipped_cooldown_candidates": selection["skipped_cooldown_candidates"],
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 
