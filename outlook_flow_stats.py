@@ -1,4 +1,5 @@
 import hashlib
+import ipaddress
 import json
 import os
 import threading
@@ -77,40 +78,76 @@ def probe_exit_ip(proxy_url):
     if not proxy_url:
         return {"enabled": True, "ok": False, "error": "no_proxy_url"}
 
-    url = os.environ.get("OUTLOOK_PROXY_PRECHECK_URL", "https://api.ipify.org").strip()
+    urls = [
+        item.strip()
+        for item in os.environ.get(
+            "OUTLOOK_PROXY_PRECHECK_URL",
+            "https://api.ipify.org,https://ifconfig.me/ip,https://icanhazip.com",
+        ).split(",")
+        if item.strip()
+    ]
+    if not urls:
+        urls = ["https://api.ipify.org"]
     timeout = float(os.environ.get("OUTLOOK_PROXY_PRECHECK_TIMEOUT", "12"))
-    started = time.time()
-    try:
-        response = requests.get(
-            url,
-            proxies={"http": proxy_url, "https": proxy_url},
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        body = response.text.strip()
-        ip = ""
+    attempts = []
+
+    for url in urls:
+        started = time.time()
         try:
-            parsed = response.json()
-            if isinstance(parsed, dict):
-                ip = str(parsed.get("ip") or parsed.get("origin") or "").strip()
-        except Exception:
-            ip = body[:128]
-        return {
-            "enabled": True,
-            "ok": True,
-            "url": url,
-            "ip": ip,
-            "status": response.status_code,
-            "latency_ms": int((time.time() - started) * 1000),
-        }
-    except Exception as exc:
-        return {
-            "enabled": True,
-            "ok": False,
-            "url": url,
-            "error": repr(exc),
-            "latency_ms": int((time.time() - started) * 1000),
-        }
+            response = requests.get(
+                url,
+                proxies={"http": proxy_url, "https": proxy_url},
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            body = response.text.strip()
+            ip = ""
+            try:
+                parsed = response.json()
+                if isinstance(parsed, dict):
+                    ip = str(parsed.get("ip") or parsed.get("origin") or "").strip()
+            except Exception:
+                ip = body[:128]
+            ip = ip.split(",", 1)[0].strip()
+            try:
+                ipaddress.ip_address(ip)
+            except ValueError:
+                attempts.append(
+                    {
+                        "url": url,
+                        "ok": False,
+                        "status": response.status_code,
+                        "error": f"invalid_ip_response:{ip[:64]}",
+                        "latency_ms": int((time.time() - started) * 1000),
+                    }
+                )
+                continue
+            return {
+                "enabled": True,
+                "ok": True,
+                "url": url,
+                "ip": ip,
+                "status": response.status_code,
+                "latency_ms": int((time.time() - started) * 1000),
+                "attempts": attempts,
+            }
+        except Exception as exc:
+            attempts.append(
+                {
+                    "url": url,
+                    "ok": False,
+                    "error": repr(exc),
+                    "latency_ms": int((time.time() - started) * 1000),
+                }
+            )
+
+    return {
+        "enabled": True,
+        "ok": False,
+        "urls": urls,
+        "error": "all_precheck_urls_failed",
+        "attempts": attempts,
+    }
 
 
 def attempt_id(attempt_index):

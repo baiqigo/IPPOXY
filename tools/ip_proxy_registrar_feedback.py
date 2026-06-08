@@ -41,6 +41,8 @@ def build_feedback(events: list[dict], min_failures: int, quarantine_reasons: se
     attempts = [item for item in events if item.get("event") == "registration_attempt_result"]
     by_exit_ip: dict[str, Counter] = defaultdict(Counter)
     by_identity: dict[str, Counter] = defaultdict(Counter)
+    unknown_exit_by_identity: dict[str, Counter] = defaultdict(Counter)
+    precheck_errors = Counter()
 
     for item in attempts:
         reason = item.get("failure_reason") or ("success" if item.get("success") else "unknown")
@@ -49,6 +51,10 @@ def build_feedback(events: list[dict], min_failures: int, quarantine_reasons: se
         exit_ip = str(exit_probe.get("ip") or "").strip() or "unknown"
         by_exit_ip[exit_ip][reason] += 1
         by_identity[identity][reason] += 1
+        if exit_ip == "unknown":
+            unknown_exit_by_identity[identity][reason] += 1
+            if exit_probe.get("enabled"):
+                precheck_errors[str(exit_probe.get("error") or "unknown_precheck_error")] += 1
 
     bad_exit_ips = []
     exit_details = {}
@@ -66,6 +72,16 @@ def build_feedback(events: list[dict], min_failures: int, quarantine_reasons: se
                 "reason": "retryable_registrar_failures_without_success",
             }
 
+    unknown_retryable_details = {}
+    for identity, counts in sorted(unknown_exit_by_identity.items()):
+        retryable_failures = sum(counts.get(reason, 0) for reason in quarantine_reasons)
+        if retryable_failures:
+            unknown_retryable_details[identity] = {
+                "counts": dict(counts),
+                "retryable_failures": retryable_failures,
+                "reason": "retryable_failures_without_exit_ip_evidence",
+            }
+
     return {
         "ts": int(time.time()),
         "attempts": len(attempts),
@@ -73,6 +89,11 @@ def build_feedback(events: list[dict], min_failures: int, quarantine_reasons: se
         "quarantine_reasons": sorted(quarantine_reasons),
         "bad_exit_ips": bad_exit_ips,
         "bad_exit_details": exit_details,
+        "unknown_exit_retryable_attempts": sum(
+            item["retryable_failures"] for item in unknown_retryable_details.values()
+        ),
+        "unknown_exit_retryable_details": unknown_retryable_details,
+        "precheck_errors": dict(precheck_errors),
         "by_exit_ip": {key: dict(value) for key, value in sorted(by_exit_ip.items())},
         "by_identity": {key: dict(value) for key, value in sorted(by_identity.items())},
     }

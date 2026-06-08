@@ -140,6 +140,51 @@ print("ok")
     return run([sys.executable, "-c", script])
 
 
+def check_registrar_feedback_diagnostics() -> dict:
+    script = r"""
+from tools.ip_proxy_registrar_feedback import build_feedback
+
+events = [
+    {
+        "event": "registration_attempt_result",
+        "failure_reason": "entry_failed",
+        "success": False,
+        "proxy_identity": "IPPOXY_RES.known",
+        "exit_probe": {"enabled": True, "ok": True, "ip": "10.0.0.1"},
+    },
+    {
+        "event": "registration_attempt_result",
+        "failure_reason": "rate_or_abnormal_after_profile",
+        "success": False,
+        "proxy_identity": "IPPOXY_RES.known",
+        "exit_probe": {"enabled": True, "ok": True, "ip": "10.0.0.1"},
+    },
+    {
+        "event": "registration_attempt_result",
+        "failure_reason": "entry_failed",
+        "success": False,
+        "proxy_identity": "IPPOXY_RES.noexit",
+        "exit_probe": {"enabled": True, "ok": False, "error": "all_precheck_urls_failed"},
+    },
+    {
+        "event": "registration_attempt_result",
+        "failure_reason": "challenge_failed_microsoft_press",
+        "success": False,
+        "proxy_identity": "IPPOXY_RES.challenge",
+        "exit_probe": {"enabled": True, "ok": True, "ip": "10.0.0.2"},
+    },
+]
+feedback = build_feedback(events, 2, {"entry_failed", "rate_or_abnormal_after_profile"})
+assert feedback["bad_exit_ips"] == ["10.0.0.1"], feedback
+assert feedback["unknown_exit_retryable_attempts"] == 1, feedback
+assert feedback["unknown_exit_retryable_details"]["IPPOXY_RES.noexit"]["retryable_failures"] == 1, feedback
+assert feedback["precheck_errors"]["all_precheck_urls_failed"] == 1, feedback
+assert "10.0.0.2" not in feedback["bad_exit_ips"], feedback
+print("ok")
+"""
+    return run([sys.executable, "-c", script])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--skip-docker", action="store_true")
@@ -164,6 +209,7 @@ def main() -> int:
         "imports": check_imports(),
         "router_without_optional_providers": check_router_without_optional_providers(),
         "fake_flow_summary": check_fake_flow_summary(),
+        "registrar_feedback_diagnostics": check_registrar_feedback_diagnostics(),
     }
     if args.skip_docker or shutil.which("docker") is None:
         checks["docker_compose_config"] = {"ok": True, "skipped": True}
