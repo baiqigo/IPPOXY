@@ -22,8 +22,8 @@ def get_proxy():
     return {"http": None, "https": None}
 
 
-def get_oauth_proxy(data=None):
-    proxy = os.environ.get("OUTLOOK_PROXY", "").strip()
+def get_oauth_proxy(data=None, proxy_url=None):
+    proxy = (proxy_url or "").strip() or os.environ.get("OUTLOOK_PROXY", "").strip()
     if not proxy and data:
         proxy = str(data.get("proxy", "")).strip()
     if proxy.startswith("http://") or proxy.startswith("https://"):
@@ -520,13 +520,13 @@ def handle_oauth2_form(page, email, password=None):
         page.wait_for_timeout(500)
 
 
-def get_access_token(page, email, password=None, max_retries=3):
+def get_access_token(page, email, password=None, max_retries=3, proxy_url=None):
     method = os.environ.get("OUTLOOK_OAUTH_METHOD", "protocol").strip().lower()
     browser_fallback = os.environ.get("OUTLOOK_OAUTH_BROWSER_FALLBACK", "").strip().lower() in ("1", "true", "yes")
     last_result = (False, False, False)
     if method in ("protocol", "protocol_then_browser"):
         for attempt in range(max_retries):
-            result = _try_get_access_token_protocol(page, email, password=password, attempt=attempt + 1)
+            result = _try_get_access_token_protocol(page, email, password=password, attempt=attempt + 1, proxy_url=proxy_url)
             last_result = result
             if result[0] is not False:
                 return result
@@ -535,7 +535,7 @@ def get_access_token(page, email, password=None, max_retries=3):
             return last_result
 
     for attempt in range(max_retries):
-        result = _try_get_access_token(page, email, password=password, attempt=attempt + 1)
+        result = _try_get_access_token(page, email, password=password, attempt=attempt + 1, proxy_url=proxy_url)
         last_result = result
         if result[0] is not False:
             return result
@@ -553,7 +553,7 @@ def _safe_page_state(page):
     return url, title
 
 
-def _load_oauth_settings(email):
+def _load_oauth_settings(email, proxy_url=None):
     with open('config.json', 'r', encoding='utf-8') as f:
         data = json.load(f)
     env_scopes = os.environ.get("OUTLOOK_OAUTH_SCOPES", "").strip()
@@ -601,6 +601,7 @@ def _load_oauth_settings(email):
         "code_verifier": code_verifier,
         "authorize_url": authorize_url,
         "email_full": email_full,
+        "proxy_url": proxy_url,
     }
 
 
@@ -616,7 +617,7 @@ def _exchange_auth_code(settings, auth_code):
             'scope': ' '.join(settings["scopes"])
         },
         headers={'Content-Type': 'application/x-www-form-urlencoded'},
-        proxies=get_oauth_proxy(settings.get("data")),
+        proxies=get_oauth_proxy(settings.get("data"), settings.get("proxy_url")),
         timeout=30,
     )
 
@@ -949,13 +950,13 @@ def _submit_protocol_form(session, response, email, password):
     return session.get(url, params=data, headers=headers, allow_redirects=False, timeout=30), "submitted_form"
 
 
-def _try_get_access_token_protocol(page, email, password=None, attempt=1):
-    settings = _load_oauth_settings(email)
+def _try_get_access_token_protocol(page, email, password=None, attempt=1, proxy_url=None):
+    settings = _load_oauth_settings(email, proxy_url=proxy_url)
     if not settings:
         return False, False, False
 
     session = _session_from_page_context(page)
-    proxies = get_oauth_proxy(settings.get("data"))
+    proxies = get_oauth_proxy(settings.get("data"), settings.get("proxy_url"))
     session.proxies.update({k: v for k, v in (proxies or {}).items() if v})
     url = settings["authorize_url"]
     pending_response = None
@@ -1035,8 +1036,8 @@ def _try_get_access_token_protocol(page, email, password=None, attempt=1):
     return False, False, False
 
 
-def _try_get_access_token(page, email, password=None, attempt=1):
-    settings = _load_oauth_settings(email)
+def _try_get_access_token(page, email, password=None, attempt=1, proxy_url=None):
+    settings = _load_oauth_settings(email, proxy_url=proxy_url)
     if not settings:
         return False, False, False
     SCOPES = settings["scopes"]

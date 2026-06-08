@@ -32,7 +32,8 @@ def process_single_flow(controller):
         elif not result:
             return False
 
-        token_result = get_access_token(page, email, password=password)
+        proxy_url = controller.thread_proxy_url() if hasattr(controller, "thread_proxy_url") else None
+        token_result = get_access_token(page, email, password=password, proxy_url=proxy_url)
         if token_result[0]:
             refresh_token, access_token, expire_at =  token_result
             full_email = f"{email}{controller.email_suffix}"
@@ -111,8 +112,8 @@ if __name__ == "__main__":
         data = json.load(f) 
     os.makedirs("Results", exist_ok=True)
 
-    max_tasks = data["max_tasks"]
-    concurrent_flows = data["concurrent_flows"]
+    max_tasks = int(os.environ.get("OUTLOOK_MAX_TASKS", data["max_tasks"]))
+    concurrent_flows = int(os.environ.get("OUTLOOK_CONCURRENT_FLOWS", data["concurrent_flows"]))
 
     if data["choose_browser"] =="patchright":
         from controllers.patchright_controller import PatchrightController

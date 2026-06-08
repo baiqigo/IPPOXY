@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from faker import Faker
 from abc import ABC, abstractmethod
-from urllib.parse import urlparse, urlunparse, unquote
+from urllib.parse import urlparse, urlunparse, unquote, quote
 
 class BaseBrowserController(ABC):
     """
@@ -45,11 +45,37 @@ class BaseBrowserController(ABC):
         self.captures_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'captures')
         os.makedirs(self.captures_dir, exist_ok=True)
 
-    def browser_proxy_settings(self):
-        if not self.proxy:
-            return None
+    def thread_proxy_url(self):
+        mode = os.environ.get("OUTLOOK_PROXY_STICKY_MODE", "").strip().lower()
+        if mode not in ("thread", "thread_id", "per_thread"):
+            return self.proxy
 
         parsed = urlparse(self.proxy)
+        if not parsed.username or "." not in parsed.username:
+            return self.proxy
+
+        suffix = f"-t{threading.get_ident() % 100000}"
+        if parsed.username.endswith(suffix):
+            return self.proxy
+        username = f"{parsed.username}{suffix}"
+        netloc = parsed.hostname or ""
+        if parsed.port:
+            netloc = f"{netloc}:{parsed.port}"
+        if username or parsed.password:
+            auth = quote(username, safe="._-")
+            if parsed.password:
+                auth = f"{auth}:{quote(parsed.password, safe='')}"
+            netloc = f"{auth}@{netloc}"
+        proxy_url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+        print(f"[Proxy] thread_identity={username} mode={mode}", flush=True)
+        return proxy_url
+
+    def browser_proxy_settings(self):
+        proxy = self.thread_proxy_url()
+        if not proxy:
+            return None
+
+        parsed = urlparse(proxy)
         scheme = "socks5" if parsed.scheme == "socks5h" else parsed.scheme
         if parsed.username or parsed.password:
             host = parsed.hostname or ''
@@ -68,7 +94,7 @@ class BaseBrowserController(ABC):
                 "bypass": "localhost",
             }
         return {
-            "server": self.proxy,
+            "server": proxy,
             "bypass": "localhost",
         }
 
