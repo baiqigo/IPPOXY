@@ -27,6 +27,7 @@ REQUIRED_FILES = [
     "tools/ip_proxy_registrar_feedback.py",
     "tools/ippoxy_sandbox_batch_verify.py",
     "tools/ip_proxy_pool_refresh.py",
+    "tools/ip_proxy_refresh_apply_verify.py",
     "tools/ip_proxy_refill_once.sh",
     "tools/ip_proxy_source_quality_report.py",
     "tools/ip_proxy_candidate_harvest.py",
@@ -67,6 +68,7 @@ def check_imports() -> dict:
         "tools.ip_proxy_registrar_feedback",
         "tools.ippoxy_sandbox_batch_verify",
         "tools.ip_proxy_pool_refresh",
+        "tools.ip_proxy_refresh_apply_verify",
         "tools.ip_proxy_source_quality_report",
         "tools.ip_proxy_candidate_harvest",
         "challenge_providers.router",
@@ -544,6 +546,41 @@ print("ok")
     return run([sys.executable, "-c", script])
 
 
+def check_refresh_apply_verify_wrapper() -> dict:
+    script = r"""
+import os
+import tempfile
+from pathlib import Path
+
+root = Path(tempfile.mkdtemp(prefix="ippoxy_refresh_wrapper_"))
+runtime = root / ".runtime/ip-proxy"
+os.environ["IPPOXY_ROOT"] = str(root)
+os.environ["IP_PROXY_RUNTIME_DIR"] = str(runtime)
+
+import importlib
+wrapper = importlib.import_module("tools.ip_proxy_refresh_apply_verify")
+
+mapping = runtime / "turn_xray_pool_20260608.json"
+mapping.parent.mkdir(parents=True, exist_ok=True)
+mapping.write_text("old-mapping", encoding="utf-8")
+conf = runtime / "conf/xray_turn_pool_25.generated.json"
+conf.parent.mkdir(parents=True, exist_ok=True)
+conf.write_text("old-conf", encoding="utf-8")
+
+backup_dir = runtime / "backups/test"
+backup = wrapper.backup_runtime_files(backup_dir, [mapping, conf])
+assert backup["copied"] == ["turn_xray_pool_20260608.json", "conf/xray_turn_pool_25.generated.json"], backup
+mapping.write_text("new-mapping", encoding="utf-8")
+conf.write_text("new-conf", encoding="utf-8")
+restore = wrapper.restore_runtime_files(backup_dir, [mapping, conf])
+assert restore["restored"] == ["turn_xray_pool_20260608.json", "conf/xray_turn_pool_25.generated.json"], restore
+assert mapping.read_text(encoding="utf-8") == "old-mapping"
+assert conf.read_text(encoding="utf-8") == "old-conf"
+print("ok")
+"""
+    return run([sys.executable, "-c", script])
+
+
 def check_candidate_harvest_source_priority() -> dict:
     script = r"""
 from tools.ip_proxy_candidate_harvest import prioritize_candidates, select_check_candidates
@@ -601,6 +638,7 @@ def main() -> int:
                 "tools/ip_proxy_registrar_feedback.py",
                 "tools/ippoxy_sandbox_batch_verify.py",
                 "tools/ip_proxy_pool_refresh.py",
+                "tools/ip_proxy_refresh_apply_verify.py",
                 "tools/ip_proxy_source_quality_report.py",
                 "tools/ip_proxy_candidate_harvest.py",
             ]
@@ -617,6 +655,7 @@ def main() -> int:
         "batch_verifier_diagnosis": check_batch_verifier_diagnosis(),
         "source_quality_pool_priority": check_source_quality_pool_priority(),
         "pool_refresh_replaces_low_priority_baseline": check_pool_refresh_replaces_low_priority_baseline(),
+        "refresh_apply_verify_wrapper": check_refresh_apply_verify_wrapper(),
         "candidate_harvest_source_priority": check_candidate_harvest_source_priority(),
     }
     if args.skip_docker or shutil.which("docker") is None:
