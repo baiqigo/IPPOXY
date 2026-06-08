@@ -24,7 +24,12 @@ def get_mailhub_bearer_token():
 
 
 def get_mailhub_base_url():
-    return os.environ.get("MAIL_HUB_URL", "").strip().rstrip("/")
+    configured = os.environ.get("MAIL_HUB_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+    if get_mailhub_bearer_token():
+        return "http://127.0.0.1:3100"
+    return ""
 
 
 def _parse_json_body(body):
