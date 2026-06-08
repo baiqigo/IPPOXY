@@ -136,6 +136,12 @@ def main() -> int:
     parser.add_argument("--batch-tasks", type=int, default=int(os.environ.get("OUTLOOK_BATCH_VERIFY_TASKS", "3")))
     parser.add_argument("--batch-concurrent", type=int, default=int(os.environ.get("OUTLOOK_BATCH_VERIFY_CONCURRENT", "1")))
     parser.add_argument("--batch-ip-failure-retries", type=int, default=int(os.environ.get("OUTLOOK_IP_FAILURE_RETRIES", "1")))
+    parser.add_argument(
+        "--batch-runner",
+        choices=["native", "docker"],
+        default=os.environ.get("OUTLOOK_BATCH_VERIFY_RUNNER", "native"),
+        help="Runner forwarded to ippoxy_sandbox_batch_verify.py.",
+    )
     parser.add_argument("--batch-run-id", default="")
     parser.add_argument("--batch-build", action="store_true", help="Build outlook-register before the post-refresh batch.")
     parser.add_argument("--batch-skip-release-check", action="store_true")
@@ -154,6 +160,8 @@ def main() -> int:
         str(args.batch_concurrent),
         "--ip-failure-retries",
         str(args.batch_ip_failure_retries),
+        "--runner",
+        args.batch_runner,
         "--run-id",
         batch_run_id,
     ]

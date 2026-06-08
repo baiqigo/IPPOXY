@@ -607,6 +607,8 @@ proc = subprocess.run(
         "1",
         "--batch-run-id",
         "release_check_post_batch",
+        "--batch-runner",
+        "native",
         "--report",
         str(report),
     ],
@@ -624,6 +626,45 @@ assert data["run_batch"] is True, data
 assert data["post_refresh_batch"]["reason"] == "dry_run_no_runtime_switch", data
 assert data["post_refresh_batch"]["planned"] is False, data
 assert "tools/ippoxy_sandbox_batch_verify.py" in data["post_refresh_batch"]["cmd"], data
+assert "--runner" in data["post_refresh_batch"]["cmd"], data
+assert "native" in data["post_refresh_batch"]["cmd"], data
+print("ok")
+"""
+    return run([sys.executable, "-c", script])
+
+
+def check_batch_verifier_native_dry_run() -> dict:
+    script = r"""
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+proc = subprocess.run(
+    [
+        sys.executable,
+        "tools/ippoxy_sandbox_batch_verify.py",
+        "--dry-run",
+        "--runner",
+        "native",
+        "--tasks",
+        "2",
+        "--concurrent",
+        "1",
+        "--run-id",
+        "release_check_native",
+    ],
+    cwd=Path.cwd(),
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+)
+assert proc.returncode == 0, proc.stdout[-1000:]
+data = json.loads(proc.stdout)
+assert data["runner"] == "native", data
+assert [sys.executable, "main.py"] in data["commands"], data
+assert not any(cmd[:3] == ["docker", "compose", "run"] for cmd in data["commands"]), data
+assert any(cmd[:2] == [sys.executable, "tools/ippoxy_release_check.py"] and "--skip-docker" in cmd for cmd in data["commands"]), data
 print("ok")
 """
     return run([sys.executable, "-c", script])
@@ -705,6 +746,7 @@ def main() -> int:
         "pool_refresh_replaces_low_priority_baseline": check_pool_refresh_replaces_low_priority_baseline(),
         "refresh_apply_verify_wrapper": check_refresh_apply_verify_wrapper(),
         "refresh_apply_verify_post_batch_dry_run": check_refresh_apply_verify_post_batch_dry_run(),
+        "batch_verifier_native_dry_run": check_batch_verifier_native_dry_run(),
         "candidate_harvest_source_priority": check_candidate_harvest_source_priority(),
     }
     if args.skip_docker or shutil.which("docker") is None:
