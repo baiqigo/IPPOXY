@@ -8,17 +8,57 @@ from challenge_providers import ChallengeRouter
 
 
 class PatchrightController(BaseBrowserController):
+    def _iframe_meta_for_frame(self, page, target_frame):
+        for idx, iframe in enumerate(page.query_selector_all("iframe")):
+            try:
+                frame = iframe.content_frame()
+            except Exception:
+                frame = None
+            if frame != target_frame:
+                continue
+            try:
+                meta = iframe.evaluate(
+                    """e => ({
+                        id: e.id,
+                        name: e.getAttribute('name'),
+                        title: e.getAttribute('title'),
+                        src: e.getAttribute('src'),
+                        style: e.getAttribute('style'),
+                        box: (() => {
+                            const r = e.getBoundingClientRect();
+                            return {x: r.x, y: r.y, width: r.width, height: r.height};
+                        })()
+                    })"""
+                )
+            except Exception as e:
+                meta = {"error": repr(e)}
+            meta["source"] = "page.frames_matched_iframe"
+            meta["index"] = idx
+            return meta
+        return {}
+
     def _find_challenge_frame(self, page):
-        page.wait_for_selector('iframe[title="验证质询"]', timeout=12000)
+        page.wait_for_selector(
+            'iframe[title="验证质询"], iframe#enforcementFrame, iframe[src*="hsprotect.net"]',
+            timeout=12000,
+        )
         candidates = []
         for idx, frame in enumerate(page.frames):
             score = 0
             meta = {"source": "page.frames", "index": idx, "name": frame.name, "url": frame.url}
+            matched_meta = self._iframe_meta_for_frame(page, frame)
+            if matched_meta:
+                meta.update(matched_meta)
+                meta["url"] = frame.url
             try:
                 if frame.locator('[aria-label="可访问性挑战"]').count() > 0:
                     score += 10
                 if frame.locator('[aria-label="再次按下"]').count() > 0:
                     score += 10
+                if frame.get_by_text("按住", exact=True).count() > 0:
+                    score += 10
+                if "hsprotect.net" in (frame.url or ""):
+                    score += 4
                 if frame.locator("button, [role=button], [aria-label]").count() > 0:
                     score += 2
             except Exception:
@@ -50,24 +90,36 @@ class PatchrightController(BaseBrowserController):
             score = 0
             meta["source"] = "top_iframe_element"
             title = meta.get("title") or ""
+            src = meta.get("src") or ""
             if "验证" in title or "challenge" in title.lower():
                 score += 5
+            if "hsprotect.net" in src:
+                score += 4
             try:
                 if frame.locator('[aria-label="可访问性挑战"]').count() > 0:
                     score += 10
                 if frame.locator('[aria-label="再次按下"]').count() > 0:
+                    score += 10
+                if frame.get_by_text("按住", exact=True).count() > 0:
                     score += 10
                 if frame.locator("button, [role=button], [aria-label]").count() > 0:
                     score += 2
             except Exception:
                 pass
             candidates.append((score, idx, frame, meta))
-        candidates.sort(key=lambda x: x[0], reverse=True)
+        candidates.sort(key=lambda x: (x[0], bool((x[3] or {}).get("box"))), reverse=True)
         if not candidates or candidates[0][0] <= 0:
             raise RuntimeError(f"challenge frame not found; iframe_count={len(iframe_handles)}")
         score, idx, frame, meta = candidates[0]
         print(f"[Captcha] - using iframe index={idx} score={score} meta={meta}", flush=True)
         return frame, meta
+
+    def _challenge_hold_ms(self):
+        low = int(os.environ.get("OUTLOOK_PRESS_HOLD_MIN_MS", "6200"))
+        high = int(os.environ.get("OUTLOOK_PRESS_HOLD_MAX_MS", "8600"))
+        if high < low:
+            high = low
+        return random.randint(low, high)
 
     def _press_point(self, page, x, y, label, hold_ms=None, micro_jitter=False):
         page.mouse.move(x + random.randint(-3, 3), y + random.randint(-3, 3), steps=random.randint(8, 15))
@@ -104,8 +156,24 @@ class PatchrightController(BaseBrowserController):
             hold_ms = random.randint(900, 1600)
         else:
             x = x0 + min(max(width * 0.56, 155), width - 30)
-            hold_ms = random.randint(10200, 13200)
+            hold_ms = self._challenge_hold_ms()
         self._press_point(page, x, y, f"visual_{label}", hold_ms=hold_ms, micro_jitter=(label == "press_again"))
+
+    def _hold_locator_or_box(self, page, locator, label, frame_meta=None, hold_ms=None):
+        if hold_ms is None:
+            hold_ms = self._challenge_hold_ms()
+        try:
+            box = locator.first.bounding_box(timeout=5000)
+            print(f"[Captcha] - {label} hold box={box}", flush=True)
+            if box:
+                x = box["x"] + box["width"] / 2 + random.uniform(-4, 4)
+                y = box["y"] + box["height"] / 2 + random.uniform(-3, 3)
+                self._press_point(page, x, y, f"hold_{label}", hold_ms=hold_ms, micro_jitter=True)
+                return True
+        except Exception as e:
+            print(f"[Captcha] - hold box failed for {label}: {e}", flush=True)
+        self._visual_challenge_press(page, frame_meta, label)
+        return True
 
     def _keyboard_challenge_press(self, page, frame_meta, hold_ms=None):
         box = (frame_meta or {}).get("box") or {}

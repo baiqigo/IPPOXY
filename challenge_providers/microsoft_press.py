@@ -1,4 +1,5 @@
 import random
+import re
 
 from .base import ChallengeProvider, ChallengeResult
 
@@ -33,10 +34,36 @@ class MicrosoftPressProvider(ChallengeProvider):
         except Exception:
             pass
         try:
-            return challenge_frame.locator(".draw").count() == 0
+            if challenge_frame.locator(".draw").count() > 0:
+                return False
         except Exception:
-            return True
-        return False
+            pass
+        return True
+
+    def _locator_count(self, locator):
+        try:
+            return locator.count()
+        except Exception:
+            return 0
+
+    def _first_available_locator(self, locators):
+        for label, locator in locators:
+            count = self._locator_count(locator)
+            print(f"[ChallengeRouter] - {label} count={count}", flush=True)
+            if count > 0:
+                return label, locator, count
+        return "", None, 0
+
+    def _hold_button_locators(self, challenge_frame):
+        hold_words = re.compile(r"(按住|再次按下|长按|hold|press)", re.I)
+        return [
+            ("press_again_aria", challenge_frame.locator('[aria-label="再次按下"]')),
+            ("hold_aria", challenge_frame.locator('[aria-label="按住"]')),
+            ("hold_text_exact", challenge_frame.get_by_text("按住", exact=True)),
+            ("press_again_text_exact", challenge_frame.get_by_text("再次按下", exact=True)),
+            ("hold_role_button", challenge_frame.get_by_role("button", name=hold_words)),
+            ("hold_text_regex", challenge_frame.get_by_text(hold_words)),
+        ]
 
     def _rate_limited(self, page):
         try:
@@ -97,26 +124,26 @@ class MicrosoftPressProvider(ChallengeProvider):
             )
 
             loc = challenge_frame.locator('[aria-label="可访问性挑战"]')
-            try:
-                accessibility_count = loc.count()
-                print(f"[ChallengeRouter] - accessibility count={accessibility_count}", flush=True)
-            except Exception as e:
-                accessibility_count = 0
-                print(f"[ChallengeRouter] - accessibility count error={e}", flush=True)
+            accessibility_count = self._locator_count(loc)
+            print(f"[ChallengeRouter] - accessibility count={accessibility_count}", flush=True)
 
-            loc2 = challenge_frame.locator('[aria-label="再次按下"]')
-            try:
-                press_again_count = loc2.count()
-                print(f"[ChallengeRouter] - press_again count={press_again_count}", flush=True)
-            except Exception as e:
-                press_again_count = 0
-                print(f"[ChallengeRouter] - press_again count error={e}", flush=True)
+            hold_label, hold_locator, hold_count = self._first_available_locator(
+                self._hold_button_locators(challenge_frame)
+            )
 
-            if accessibility_count > 0 or press_again_count > 0:
+            if accessibility_count > 0 or hold_count > 0:
                 if accessibility_count > 0:
                     controller._click_locator_or_box(page, loc, "accessibility_challenge", frame_meta)
                     page.wait_for_timeout(random.randint(400, 900))
-                controller._click_locator_or_box(page, loc2, "press_again", frame_meta)
+                    hold_label, hold_locator, hold_count = self._first_available_locator(
+                        self._hold_button_locators(challenge_frame)
+                    )
+                if hold_count > 0:
+                    print(f"[ChallengeRouter] - holding button via {hold_label}", flush=True)
+                    controller._hold_locator_or_box(page, hold_locator, "press_again", frame_meta)
+                else:
+                    print("[ChallengeRouter] - no hold locator after accessibility; visual long-press", flush=True)
+                    controller._visual_challenge_press(page, frame_meta, "press_again")
             else:
                 print("[ChallengeRouter] - no DOM buttons found; visual long-press on hold button", flush=True)
                 controller._visual_challenge_press(page, frame_meta, "press_again")
@@ -139,7 +166,7 @@ class MicrosoftPressProvider(ChallengeProvider):
                     evidence=evidence or {},
                 )
 
-            if accessibility_count == 0 and press_again_count == 0:
+            if accessibility_count == 0 and hold_count == 0:
                 print("[ChallengeRouter] - mouse press did not clear; trying keyboard hold fallback", flush=True)
                 controller._keyboard_challenge_press(page, frame_meta)
                 wait_result = self._wait_after_press(page, controller, challenge_frame, attempt, "keyboard")
