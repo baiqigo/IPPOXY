@@ -83,9 +83,10 @@ def known_bad_exit_ips():
     bad = set()
 
     feedback = read_json_file(feedback_path)
-    feedback_bad = feedback.get("bad_exit_ips", [])
-    if isinstance(feedback_bad, list):
-        bad.update(str(item).strip() for item in feedback_bad if str(item).strip())
+    for field in ("bad_exit_ips", "avoid_exit_ips"):
+        feedback_bad = feedback.get(field, [])
+        if isinstance(feedback_bad, list):
+            bad.update(str(item).strip() for item in feedback_bad if str(item).strip())
 
     verify = read_json_file(verify_path)
     for item in verify.get("port_results", []):

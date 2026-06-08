@@ -554,7 +554,7 @@ def main() -> int:
                 ensure_ascii=False,
             )
         )
-        return 0
+        return 0 if args.dry_run else 2
 
     verify_failed = failed_exit_ips(args.verify)
     registrar_failed = registrar_failed_exit_ips(args.registrar_feedback)
