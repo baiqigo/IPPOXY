@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -26,6 +27,7 @@ DEFAULT_REGISTRAR_FEEDBACK = ROOT / "captures/ip_registrar_feedback_latest.json"
 DEFAULT_SOURCE_QUALITY = RUNTIME / "research/proxy_source_quality_latest.json"
 DEFAULT_WORKER_HOST = os.environ.get("IP_PROXY_TURN_WORKER_HOST", "cdn.baiqi.xyz")
 DEFAULT_UUID = "2523c510-9ff0-415b-9582-93949bfae7e3"
+DEFAULT_MAX_FALLBACK_CANDIDATE_AGE_HOURS = float(os.environ.get("IP_PROXY_MAX_FALLBACK_CANDIDATE_AGE_HOURS", "48"))
 
 
 def slug(value: str) -> str:
@@ -183,6 +185,49 @@ def clean_turn_candidates(path: Path) -> list[dict]:
     return out
 
 
+def file_age_hours(path: Path, now: float | None = None) -> float | None:
+    if not path.exists():
+        return None
+    now = time.time() if now is None else now
+    return round(max(0.0, now - path.stat().st_mtime) / 3600.0, 2)
+
+
+def candidate_file_audit(
+    path: Path,
+    candidates: list[dict],
+    *,
+    role: str,
+    min_clean: int,
+    max_age_hours: float,
+    allow_stale: bool,
+    now: float | None = None,
+) -> dict:
+    age_hours = file_age_hours(path, now)
+    enough_clean = len(candidates) >= min_clean
+    fresh_enough = (
+        allow_stale
+        or max_age_hours <= 0
+        or age_hours is None
+        or age_hours <= max_age_hours
+    )
+    reason = ""
+    if not enough_clean:
+        reason = "not_enough_clean_candidates"
+    elif not fresh_enough:
+        reason = "stale_candidate_file"
+    return {
+        "path": str(path),
+        "role": role,
+        "clean_turn_candidates": len(candidates),
+        "min_clean": min_clean,
+        "age_hours": age_hours,
+        "max_age_hours": max_age_hours,
+        "allow_stale": allow_stale,
+        "accepted": bool(enough_clean and fresh_enough),
+        "reason": reason,
+    }
+
+
 def load_source_quality(path: Path) -> tuple[dict[str, dict], dict]:
     data = read_json(path, {})
     if not isinstance(data, dict):
@@ -217,10 +262,22 @@ def resolve_candidate_input(
     path: Path,
     min_clean: int,
     source_quality: dict[str, dict] | None = None,
-) -> tuple[Path, list[dict], str | None]:
+    max_age_hours: float = DEFAULT_MAX_FALLBACK_CANDIDATE_AGE_HOURS,
+    allow_stale: bool = False,
+) -> tuple[Path, list[dict], str | None, list[dict]]:
+    audit: list[dict] = []
     candidates = prioritize_candidates(clean_turn_candidates(path), source_quality)
-    if len(candidates) >= min_clean:
-        return path, candidates, None
+    requested_audit = candidate_file_audit(
+        path,
+        candidates,
+        role="requested_input",
+        min_clean=min_clean,
+        max_age_hours=max_age_hours,
+        allow_stale=allow_stale,
+    )
+    audit.append(requested_audit)
+    if requested_audit["accepted"]:
+        return path, candidates, None, audit
 
     fallback_files = sorted(
         [*RUNTIME_RESIN_DIR.glob("clean_candidates_classified*.json"), *RESIN_DIR.glob("clean_candidates_classified*.json")],
@@ -231,9 +288,22 @@ def resolve_candidate_input(
         if fallback == path:
             continue
         fallback_candidates = prioritize_candidates(clean_turn_candidates(fallback), source_quality)
-        if len(fallback_candidates) >= min_clean:
-            return fallback, fallback_candidates, f"{path} only had {len(candidates)} clean TURN candidates"
-    return path, candidates, None
+        item_audit = candidate_file_audit(
+            fallback,
+            fallback_candidates,
+            role="fallback",
+            min_clean=min_clean,
+            max_age_hours=max_age_hours,
+            allow_stale=allow_stale,
+        )
+        audit.append(item_audit)
+        if item_audit["accepted"]:
+            if requested_audit["reason"] == "stale_candidate_file":
+                reason = f"{path} had {len(candidates)} clean TURN candidates but was stale ({requested_audit['age_hours']}h)"
+            else:
+                reason = f"{path} only had {len(candidates)} clean TURN candidates"
+            return fallback, fallback_candidates, reason, audit
+    return path, [] if requested_audit["reason"] == "stale_candidate_file" else candidates, requested_audit["reason"] or None, audit
 
 
 def failed_exit_ips(verify_path: Path) -> set[str]:
@@ -433,6 +503,18 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=int(os.environ.get("IP_PROXY_POOL_SIZE", "25")))
     parser.add_argument("--min-clean", type=int, default=int(os.environ.get("IP_PROXY_MIN_CLEAN", "12")))
     parser.add_argument("--min-new-candidates", type=int, default=int(os.environ.get("IP_PROXY_MIN_NEW_CANDIDATES", "8")))
+    parser.add_argument(
+        "--max-fallback-candidate-age-hours",
+        type=float,
+        default=DEFAULT_MAX_FALLBACK_CANDIDATE_AGE_HOURS,
+        help="maximum age for requested/fallback clean candidate files; 0 disables the age check",
+    )
+    parser.add_argument(
+        "--allow-stale-fallback-candidates",
+        action="store_true",
+        default=os.environ.get("IP_PROXY_ALLOW_STALE_FALLBACK_CANDIDATES", "0").strip().lower() in ("1", "true", "yes", "on"),
+        help="allow stale clean candidate files to be used when replacing the runtime pool",
+    )
     parser.add_argument("--write-docs", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="compute the refresh result without modifying runtime files")
     parser.add_argument(
@@ -448,7 +530,13 @@ def main() -> int:
     if not isinstance(baseline, list):
         raise SystemExit(f"invalid baseline mapping: {baseline_path}")
     source_quality, source_quality_meta = load_source_quality(args.source_quality)
-    input_path, candidates, fallback_reason = resolve_candidate_input(args.input, args.min_clean, source_quality)
+    input_path, candidates, fallback_reason, candidate_input_audit = resolve_candidate_input(
+        args.input,
+        args.min_clean,
+        source_quality,
+        args.max_fallback_candidate_age_hours,
+        args.allow_stale_fallback_candidates,
+    )
     if len(candidates) < args.min_clean:
         print(
             json.dumps(
@@ -458,6 +546,10 @@ def main() -> int:
                     "input": str(args.input),
                     "clean": len(candidates),
                     "min_clean": args.min_clean,
+                    "fallback_reason": fallback_reason,
+                    "candidate_input_audit": candidate_input_audit,
+                    "max_fallback_candidate_age_hours": args.max_fallback_candidate_age_hours,
+                    "allow_stale_fallback_candidates": args.allow_stale_fallback_candidates,
                 },
                 ensure_ascii=False,
             )
@@ -488,10 +580,13 @@ def main() -> int:
             "verify": str(args.verify),
             "registrar_feedback": str(args.registrar_feedback),
             "source_quality": source_quality_meta,
+            "candidate_input_audit": candidate_input_audit,
             "verify_bad_exit_ips": sorted(verify_failed),
             "registrar_bad_exit_ips": sorted(registrar_failed),
             "fallback_reason": fallback_reason,
             "min_new_candidates": args.min_new_candidates,
+            "max_fallback_candidate_age_hours": args.max_fallback_candidate_age_hours,
+            "allow_stale_fallback_candidates": args.allow_stale_fallback_candidates,
             "dry_run": args.dry_run,
             **meta,
         }
@@ -512,10 +607,13 @@ def main() -> int:
         "verify": str(args.verify),
         "registrar_feedback": str(args.registrar_feedback),
         "source_quality": source_quality_meta,
+        "candidate_input_audit": candidate_input_audit,
         "verify_bad_exit_ips": sorted(verify_failed),
         "registrar_bad_exit_ips": sorted(registrar_failed),
         "fallback_reason": fallback_reason,
         "min_new_candidates": args.min_new_candidates,
+        "max_fallback_candidate_age_hours": args.max_fallback_candidate_age_hours,
+        "allow_stale_fallback_candidates": args.allow_stale_fallback_candidates,
         **meta,
         **written,
     }
