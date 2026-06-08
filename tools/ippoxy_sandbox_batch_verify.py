@@ -296,7 +296,7 @@ def main() -> int:
         help="Run the registration batch directly with Python or via docker compose.",
     )
     parser.add_argument("--build", action="store_true", help="Run docker compose build outlook-register before a docker batch.")
-    parser.add_argument("--dry-run", action="store_true", help="Only print planned commands and write no report.")
+    parser.add_argument("--dry-run", action="store_true", help="Only print planned commands and write a dry-run report.")
     parser.add_argument("--skip-release-check", action="store_true")
     args = parser.parse_args()
 
@@ -335,17 +335,20 @@ def main() -> int:
     commands.append([sys.executable, "tools/ip_proxy_pool_refresh.py", "--dry-run"])
 
     if args.dry_run:
+        report = {
+            "dry_run": True,
+            "runner": args.runner,
+            "build_skipped": build_skipped,
+            "report_path": str(report_path),
+            "log_path": str(log_path),
+            "env": {k: env[k] for k in sorted(env) if k.startswith("OUTLOOK_")},
+            "commands": commands,
+        }
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(
             json.dumps(
-                {
-                    "dry_run": True,
-                    "runner": args.runner,
-                    "build_skipped": build_skipped,
-                    "report_path": str(report_path),
-                    "log_path": str(log_path),
-                    "env": {k: env[k] for k in sorted(env) if k.startswith("OUTLOOK_")},
-                    "commands": commands,
-                },
+                report,
                 ensure_ascii=False,
                 indent=2,
             )
