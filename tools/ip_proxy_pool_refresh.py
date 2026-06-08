@@ -24,7 +24,7 @@ DEFAULT_BASELINE = DOC_RUNTIME_DIR / "turn_xray_pool_20260608.json"
 DEFAULT_VERIFY = ROOT / "captures/ip_runtime_verify_latest.json"
 DEFAULT_REGISTRAR_FEEDBACK = ROOT / "captures/ip_registrar_feedback_latest.json"
 DEFAULT_SOURCE_QUALITY = RUNTIME / "research/proxy_source_quality_latest.json"
-DEFAULT_WORKER_HOST = "ip-proxy-turn-poc.khowk1isgv.workers.dev"
+DEFAULT_WORKER_HOST = os.environ.get("IP_PROXY_TURN_WORKER_HOST", "cdn.baiqi.xyz")
 DEFAULT_UUID = "2523c510-9ff0-415b-9582-93949bfae7e3"
 
 
@@ -38,6 +38,8 @@ def classify(item: dict) -> str:
     asn_type = (item.get("asn_type") or "").lower()
     if company_type == "isp" and asn_type == "isp":
         return "res"
+    if "isp" in {company_type, asn_type}:
+        return "isp"
     return "static"
 
 
@@ -249,10 +251,13 @@ def registrar_failed_exit_ips(feedback_path: Path) -> set[str]:
     data = read_json(feedback_path, {})
     if not isinstance(data, dict):
         return set()
-    failed = data.get("bad_exit_ips", [])
-    if not isinstance(failed, list):
-        return set()
-    return {str(item).strip() for item in failed if str(item).strip()}
+    failed: set[str] = set()
+    for field in ("bad_exit_ips", "avoid_exit_ips"):
+        values = data.get(field, [])
+        if not isinstance(values, list):
+            continue
+        failed.update(str(item).strip() for item in values if str(item).strip())
+    return failed
 
 
 def normalize_row(item: dict, port: int, worker_host: str, uuid: str, source: str) -> dict:
@@ -282,6 +287,7 @@ def select_rows(
     limit: int,
     worker_host: str,
     uuid: str,
+    min_new_candidates: int = 0,
 ) -> tuple[list[dict], dict]:
     by_exit: dict[str, dict] = {}
     by_raw: set[str] = set()
@@ -301,11 +307,14 @@ def select_rows(
         by_exit[str(exit_ip)] = item
         return True
 
+    min_new_candidates = max(0, min(int(min_new_candidates or 0), limit))
     baseline_good = [item for item in baseline if str(item.get("exit_ip")) not in bad_exit_ips]
     baseline_priority = [item for item in baseline_good if pool_priority(item) <= 1]
     baseline_fallback = [item for item in baseline_good if pool_priority(item) > 1]
 
     for item in baseline_priority:
+        if len(selected) >= max(0, limit - min_new_candidates):
+            break
         add(item, "baseline")
 
     added_from_candidates = 0
@@ -314,6 +323,14 @@ def select_rows(
             added_from_candidates += 1
         if len(selected) >= limit:
             break
+
+    retained_reserved_baseline = 0
+    if len(selected) < limit:
+        for item in baseline_priority:
+            if add(item, "baseline_reserved"):
+                retained_reserved_baseline += 1
+            if len(selected) >= limit:
+                break
 
     retained_low_priority_baseline = 0
     if len(selected) < limit:
@@ -348,6 +365,7 @@ def select_rows(
         "bad_exit_ips": sorted(bad_exit_ips),
         "added_from_candidates": added_from_candidates,
         "retained_priority_baseline": sum(1 for row in selected if row.get("source") == "baseline"),
+        "retained_reserved_baseline": retained_reserved_baseline,
         "retained_low_priority_baseline": retained_low_priority_baseline,
         "retained_bad_exit_ips": retained_bad_exit_ips,
         "retained_bad_exit_details": retained_bad_exit_details,
@@ -414,6 +432,7 @@ def main() -> int:
     parser.add_argument("--uuid", default=DEFAULT_UUID)
     parser.add_argument("--limit", type=int, default=int(os.environ.get("IP_PROXY_POOL_SIZE", "25")))
     parser.add_argument("--min-clean", type=int, default=int(os.environ.get("IP_PROXY_MIN_CLEAN", "12")))
+    parser.add_argument("--min-new-candidates", type=int, default=int(os.environ.get("IP_PROXY_MIN_NEW_CANDIDATES", "8")))
     parser.add_argument("--write-docs", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="compute the refresh result without modifying runtime files")
     parser.add_argument(
@@ -454,6 +473,7 @@ def main() -> int:
         args.limit,
         args.worker_host,
         args.uuid,
+        args.min_new_candidates,
     )
     if len(rows) < args.limit:
         raise SystemExit(f"only selected {len(rows)} rows, need {args.limit}")
@@ -471,6 +491,7 @@ def main() -> int:
             "verify_bad_exit_ips": sorted(verify_failed),
             "registrar_bad_exit_ips": sorted(registrar_failed),
             "fallback_reason": fallback_reason,
+            "min_new_candidates": args.min_new_candidates,
             "dry_run": args.dry_run,
             **meta,
         }
@@ -494,6 +515,7 @@ def main() -> int:
         "verify_bad_exit_ips": sorted(verify_failed),
         "registrar_bad_exit_ips": sorted(registrar_failed),
         "fallback_reason": fallback_reason,
+        "min_new_candidates": args.min_new_candidates,
         **meta,
         **written,
     }

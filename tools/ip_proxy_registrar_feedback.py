@@ -19,6 +19,9 @@ RETRYABLE_IP_REASONS = {
     "proxy_precheck_bad_exit",
     "rate_or_abnormal_after_profile",
 }
+AVOID_IP_REASONS = RETRYABLE_IP_REASONS | {
+    "challenge_failed_microsoft_press",
+}
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -59,10 +62,13 @@ def build_feedback(events: list[dict], min_failures: int, quarantine_reasons: se
 
     bad_exit_ips = []
     exit_details = {}
+    avoid_exit_ips = []
+    avoid_details = {}
     for exit_ip, counts in sorted(by_exit_ip.items()):
         if exit_ip == "unknown":
             continue
         retryable_failures = sum(counts.get(reason, 0) for reason in quarantine_reasons)
+        avoid_failures = sum(counts.get(reason, 0) for reason in AVOID_IP_REASONS)
         successes = counts.get("success", 0)
         if retryable_failures >= min_failures and successes == 0:
             bad_exit_ips.append(exit_ip)
@@ -71,6 +77,17 @@ def build_feedback(events: list[dict], min_failures: int, quarantine_reasons: se
                 "retryable_failures": retryable_failures,
                 "successes": successes,
                 "reason": "retryable_registrar_failures_without_success",
+            }
+        if avoid_failures > 0 and successes == 0:
+            avoid_exit_ips.append(exit_ip)
+            dominant_reason, dominant_count = counts.most_common(1)[0]
+            avoid_details[exit_ip] = {
+                "counts": dict(counts),
+                "avoid_failures": avoid_failures,
+                "successes": successes,
+                "reason": f"recent_registrar_failure:{dominant_reason}",
+                "dominant_reason": dominant_reason,
+                "dominant_count": dominant_count,
             }
 
     unknown_retryable_details = {}
@@ -90,6 +107,8 @@ def build_feedback(events: list[dict], min_failures: int, quarantine_reasons: se
         "quarantine_reasons": sorted(quarantine_reasons),
         "bad_exit_ips": bad_exit_ips,
         "bad_exit_details": exit_details,
+        "avoid_exit_ips": sorted(set(avoid_exit_ips)),
+        "avoid_exit_details": avoid_details,
         "unknown_exit_retryable_attempts": sum(
             item["retryable_failures"] for item in unknown_retryable_details.values()
         ),

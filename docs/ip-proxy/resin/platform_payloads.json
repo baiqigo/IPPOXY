@@ -16,7 +16,8 @@
       "name": "IPPOXY_RES",
       "sticky_ttl": "24h",
       "regex_filters": [
-        "ippoxy-res-"
+        "ippoxy-res-",
+        "ippoxy-isp-"
       ],
       "region_filters": [],
       "allocation_policy": "PREFER_IDLE_IP",
