@@ -813,7 +813,10 @@ proc = subprocess.run(
 assert proc.returncode == 0, proc.stdout[-1000:]
 data = json.loads(proc.stdout)
 assert data["runner"] == "native", data
-assert [sys.executable, "main.py"] in data["commands"], data
+assert (
+    [sys.executable, "main.py"] in data["commands"]
+    or ["xvfb-run", "-a", sys.executable, "main.py"] in data["commands"]
+), data
 assert [sys.executable, "tools/ippoxy_native_env_check.py"] in data["commands"], data
 assert not any(cmd[:3] == ["docker", "compose", "run"] for cmd in data["commands"]), data
 assert any(cmd[:2] == [sys.executable, "tools/ippoxy_release_check.py"] and "--skip-docker" in cmd for cmd in data["commands"]), data
