@@ -115,8 +115,8 @@ class PatchrightController(BaseBrowserController):
         return frame, meta
 
     def _challenge_hold_ms(self):
-        low = int(os.environ.get("OUTLOOK_PRESS_HOLD_MIN_MS", "6200"))
-        high = int(os.environ.get("OUTLOOK_PRESS_HOLD_MAX_MS", "8600"))
+        low = int(os.environ.get("OUTLOOK_PRESS_HOLD_MIN_MS", "11000"))
+        high = int(os.environ.get("OUTLOOK_PRESS_HOLD_MAX_MS", "15000"))
         if high < low:
             high = low
         return random.randint(low, high)
@@ -157,7 +157,7 @@ class PatchrightController(BaseBrowserController):
         else:
             x = x0 + min(max(width * 0.56, 155), width - 30)
             hold_ms = self._challenge_hold_ms()
-        self._press_point(page, x, y, f"visual_{label}", hold_ms=hold_ms, micro_jitter=(label == "press_again"))
+        self._press_point(page, x, y, f"visual_{label}", hold_ms=hold_ms, micro_jitter=False)
 
     def _hold_locator_or_box(self, page, locator, label, frame_meta=None, hold_ms=None):
         if hold_ms is None:
@@ -168,7 +168,7 @@ class PatchrightController(BaseBrowserController):
             if box:
                 x = box["x"] + box["width"] / 2 + random.uniform(-4, 4)
                 y = box["y"] + box["height"] / 2 + random.uniform(-3, 3)
-                self._press_point(page, x, y, f"hold_{label}", hold_ms=hold_ms, micro_jitter=True)
+                self._press_point(page, x, y, f"hold_{label}", hold_ms=hold_ms, micro_jitter=False)
                 return True
         except Exception as e:
             print(f"[Captcha] - hold box failed for {label}: {e}", flush=True)
