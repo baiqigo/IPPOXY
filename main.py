@@ -19,6 +19,8 @@ def process_single_flow(controller):
     page = None
 
     try:
+        if hasattr(controller, "begin_flow_proxy_identity"):
+            controller.begin_flow_proxy_identity()
         page = controller.get_thread_page()
 
         email = random_email()

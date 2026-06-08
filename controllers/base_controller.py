@@ -47,14 +47,21 @@ class BaseBrowserController(ABC):
 
     def thread_proxy_url(self):
         mode = os.environ.get("OUTLOOK_PROXY_STICKY_MODE", "").strip().lower()
-        if mode not in ("thread", "thread_id", "per_thread"):
+        if mode not in ("thread", "thread_id", "per_thread", "flow", "task", "per_flow", "per_task"):
             return self.proxy
 
         parsed = urlparse(self.proxy)
         if not parsed.username or "." not in parsed.username:
             return self.proxy
 
-        suffix = f"-t{threading.get_ident() % 100000}"
+        if mode in ("flow", "task", "per_flow", "per_task"):
+            nonce = getattr(self.thread_local, "proxy_identity", "")
+            if not nonce:
+                nonce = f"f{int(time.time() * 1000) % 100000}-{random.randint(1000, 9999)}"
+                self.thread_local.proxy_identity = nonce
+            suffix = f"-{nonce}"
+        else:
+            suffix = f"-t{threading.get_ident() % 100000}"
         if parsed.username.endswith(suffix):
             return self.proxy
         username = f"{parsed.username}{suffix}"
@@ -69,6 +76,14 @@ class BaseBrowserController(ABC):
         proxy_url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
         print(f"[Proxy] thread_identity={username} mode={mode}", flush=True)
         return proxy_url
+
+    def begin_flow_proxy_identity(self):
+        mode = os.environ.get("OUTLOOK_PROXY_STICKY_MODE", "").strip().lower()
+        if mode not in ("flow", "task", "per_flow", "per_task"):
+            return
+        nonce = f"f{int(time.time() * 1000) % 100000}-{random.randint(1000, 9999)}"
+        self.thread_local.proxy_identity = nonce
+        print(f"[Proxy] flow_identity={nonce} mode={mode}", flush=True)
 
     def browser_proxy_settings(self):
         proxy = self.thread_proxy_url()

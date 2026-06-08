@@ -301,7 +301,19 @@ class PatchrightController(BaseBrowserController):
     def clean_up(self, page=None, type="all_browser"):
         if type == "done_browser" and page:
             context = page.context
-            context.close()
+            try:
+                context.close()
+            except Exception:
+                pass
+            try:
+                self.thread_local.playwright.stop()
+            except Exception:
+                pass
+            for attr in ("browser", "playwright", "proxy_identity"):
+                try:
+                    delattr(self.thread_local, attr)
+                except Exception:
+                    pass
 
         elif type == "all_browser":
             for p, b in self.active_resources:
