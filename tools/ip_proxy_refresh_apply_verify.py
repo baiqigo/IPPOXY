@@ -55,6 +55,40 @@ def run(cmd: list[str], *, check: bool = False) -> dict:
     return item
 
 
+def load_json(path: Path) -> object:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except json.JSONDecodeError as exc:
+        return {"error": f"json_decode_failed: {exc}", "path": str(path)}
+
+
+def summarize_batch_report(path: Path) -> dict:
+    if not path.exists():
+        return {"path": str(path), "loaded": False, "reason": "missing_report"}
+    data = load_json(path)
+    if not isinstance(data, dict) or data.get("error"):
+        return {"path": str(path), "loaded": False, "reason": "invalid_report"}
+    diagnosis = data.get("batch_diagnosis") if isinstance(data.get("batch_diagnosis"), dict) else {}
+    return {
+        "path": str(path),
+        "loaded": True,
+        "ok": data.get("ok"),
+        "run_id": data.get("run_id"),
+        "count_delta": data.get("count_delta", {}),
+        "mailhub_stats_delta": data.get("mailhub_stats_delta", {}),
+        "batch_diagnosis": {
+            "status": diagnosis.get("status"),
+            "dominant_lane": diagnosis.get("dominant_lane"),
+            "fresh_token_or_mailhub_progress": diagnosis.get("fresh_token_or_mailhub_progress"),
+            "needs_ip_refresh": diagnosis.get("needs_ip_refresh"),
+            "needs_challenge_evidence_or_manual_fallback": diagnosis.get("needs_challenge_evidence_or_manual_fallback"),
+            "needs_program_fix": diagnosis.get("needs_program_fix"),
+        },
+    }
+
+
 def backup_runtime_files(backup_dir: Path, files: list[Path] | None = None) -> dict:
     files = files or RUNTIME_FILES
     copied = []
@@ -98,17 +132,49 @@ def main() -> int:
     parser.add_argument("--apply", action="store_true", help="Actually write runtime files and restart Xray/Resin.")
     parser.add_argument("--skip-verify", action="store_true", help="Skip runtime verification after apply.")
     parser.add_argument("--no-rollback", action="store_true", help="Do not restore the previous runtime files on failure.")
+    parser.add_argument("--run-batch", action="store_true", help="After a successful apply, run Outlook batch verification.")
+    parser.add_argument("--batch-tasks", type=int, default=int(os.environ.get("OUTLOOK_BATCH_VERIFY_TASKS", "3")))
+    parser.add_argument("--batch-concurrent", type=int, default=int(os.environ.get("OUTLOOK_BATCH_VERIFY_CONCURRENT", "1")))
+    parser.add_argument("--batch-ip-failure-retries", type=int, default=int(os.environ.get("OUTLOOK_IP_FAILURE_RETRIES", "1")))
+    parser.add_argument("--batch-run-id", default="")
+    parser.add_argument("--batch-build", action="store_true", help="Build outlook-register before the post-refresh batch.")
+    parser.add_argument("--batch-skip-release-check", action="store_true")
     parser.add_argument("--pool-refresh-arg", action="append", default=[], help="Extra arg forwarded to ip_proxy_pool_refresh.py.")
     parser.add_argument("--report", type=Path, default=REPORT)
     args = parser.parse_args()
+
+    batch_run_id = args.batch_run_id or f"refresh_batch_{time.strftime('%Y%m%d_%H%M%S', time.gmtime())}"
+    batch_report_path = CAPTURES / f"outlook_batch_verify_{batch_run_id}.json"
+    batch_cmd = [
+        sys.executable,
+        "tools/ippoxy_sandbox_batch_verify.py",
+        "--tasks",
+        str(args.batch_tasks),
+        "--concurrent",
+        str(args.batch_concurrent),
+        "--ip-failure-retries",
+        str(args.batch_ip_failure_retries),
+        "--run-id",
+        batch_run_id,
+    ]
+    if args.batch_build:
+        batch_cmd.append("--build")
+    if args.batch_skip_release_check:
+        batch_cmd.append("--skip-release-check")
 
     backup_dir = RUNTIME / "backups" / time.strftime("refresh_%Y%m%d_%H%M%S", time.gmtime())
     report = {
         "ts": int(time.time()),
         "apply": bool(args.apply),
+        "run_batch": bool(args.run_batch),
         "root": str(ROOT),
         "runtime": str(RUNTIME),
         "backup_dir": str(backup_dir),
+        "post_refresh_batch": {
+            "planned": bool(args.run_batch),
+            "cmd": batch_cmd,
+            "report_path": str(batch_report_path),
+        },
         "runtime_files_before": [file_artifact(path) for path in RUNTIME_FILES],
         "steps": [],
     }
@@ -118,6 +184,8 @@ def main() -> int:
         report["steps"].append(run(cmd))
         report["runtime_files_after"] = [file_artifact(path) for path in RUNTIME_FILES]
         report["status"] = "dry_run"
+        report["post_refresh_batch"]["planned"] = False
+        report["post_refresh_batch"]["reason"] = "dry_run_no_runtime_switch"
         write_report(report, args.report)
         print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
         return 0 if report["steps"][-1]["ok"] else 1
@@ -128,8 +196,14 @@ def main() -> int:
         report["steps"].append(run(["bash", "tools/ip_proxy_runtime_up.sh"], check=True))
         if not args.skip_verify:
             report["steps"].append(run([sys.executable, "tools/ip_proxy_runtime_verify.py"], check=True))
+        if args.run_batch:
+            report["steps"].append(run(batch_cmd, check=False))
+            report["post_refresh_batch"]["summary"] = summarize_batch_report(batch_report_path)
         report["status"] = "ok"
         exit_code = 0
+        if args.run_batch and not report["steps"][-1]["ok"]:
+            report["status"] = "batch_failed"
+            exit_code = 1
     except Exception as exc:
         report["status"] = "failed"
         report["error"] = str(exc)[:4000]

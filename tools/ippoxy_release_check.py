@@ -576,6 +576,54 @@ restore = wrapper.restore_runtime_files(backup_dir, [mapping, conf])
 assert restore["restored"] == ["turn_xray_pool_20260608.json", "conf/xray_turn_pool_25.generated.json"], restore
 assert mapping.read_text(encoding="utf-8") == "old-mapping"
 assert conf.read_text(encoding="utf-8") == "old-conf"
+summary = wrapper.summarize_batch_report(root / "missing.json")
+assert summary["loaded"] is False, summary
+print("ok")
+"""
+    return run([sys.executable, "-c", script])
+
+
+def check_refresh_apply_verify_post_batch_dry_run() -> dict:
+    script = r"""
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+root = Path(tempfile.mkdtemp(prefix="ippoxy_refresh_post_batch_"))
+report = root / "refresh_report.json"
+env = os.environ.copy()
+env["IP_PROXY_RUNTIME_DIR"] = str(root / ".runtime/ip-proxy")
+proc = subprocess.run(
+    [
+        sys.executable,
+        "tools/ip_proxy_refresh_apply_verify.py",
+        "--run-batch",
+        "--batch-tasks",
+        "2",
+        "--batch-concurrent",
+        "1",
+        "--batch-run-id",
+        "release_check_post_batch",
+        "--report",
+        str(report),
+    ],
+    cwd=Path.cwd(),
+    env=env,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+)
+assert proc.returncode == 0, proc.stdout[-1000:]
+data = json.loads(report.read_text(encoding="utf-8"))
+assert data["status"] == "dry_run", data
+assert data["apply"] is False, data
+assert data["run_batch"] is True, data
+assert data["post_refresh_batch"]["reason"] == "dry_run_no_runtime_switch", data
+assert data["post_refresh_batch"]["planned"] is False, data
+assert "tools/ippoxy_sandbox_batch_verify.py" in data["post_refresh_batch"]["cmd"], data
 print("ok")
 """
     return run([sys.executable, "-c", script])
@@ -656,6 +704,7 @@ def main() -> int:
         "source_quality_pool_priority": check_source_quality_pool_priority(),
         "pool_refresh_replaces_low_priority_baseline": check_pool_refresh_replaces_low_priority_baseline(),
         "refresh_apply_verify_wrapper": check_refresh_apply_verify_wrapper(),
+        "refresh_apply_verify_post_batch_dry_run": check_refresh_apply_verify_post_batch_dry_run(),
         "candidate_harvest_source_priority": check_candidate_harvest_source_priority(),
     }
     if args.skip_docker or shutil.which("docker") is None:
