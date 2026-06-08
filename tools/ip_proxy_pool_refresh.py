@@ -116,7 +116,7 @@ def xray_config(rows: list[dict], uuid: str, worker_host: str) -> dict:
 def read_json(path: Path, default: object) -> object:
     if not path.exists():
         return default
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def file_sha(path: Path) -> str | None:
@@ -253,9 +253,26 @@ def select_rows(
             if len(selected) >= limit:
                 break
 
+    retained_bad_exit_ips = sorted(
+        {
+            str(row.get("exit_ip"))
+            for row in selected
+            if row.get("source") == "baseline_retain_failed" and str(row.get("exit_ip")) in bad_exit_ips
+        }
+    )
+    retained_bad_exit_details = {
+        exit_ip: {
+            "source": "baseline_retain_failed",
+            "reason": "not_enough_replacement_candidates",
+        }
+        for exit_ip in retained_bad_exit_ips
+    }
+
     return selected, {
         "bad_exit_ips": sorted(bad_exit_ips),
         "added_from_candidates": added_from_candidates,
+        "retained_bad_exit_ips": retained_bad_exit_ips,
+        "retained_bad_exit_details": retained_bad_exit_details,
         "selected": len(selected),
         "limit": limit,
     }
@@ -320,6 +337,12 @@ def main() -> int:
     parser.add_argument("--min-clean", type=int, default=int(os.environ.get("IP_PROXY_MIN_CLEAN", "12")))
     parser.add_argument("--write-docs", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="compute the refresh result without modifying runtime files")
+    parser.add_argument(
+        "--allow-retain-bad-exits",
+        action="store_true",
+        default=os.environ.get("IP_PROXY_ALLOW_RETAIN_BAD_EXITS", "0").strip().lower() in ("1", "true", "yes", "on"),
+        help="allow runtime apply even if the selected pool still contains known bad exits",
+    )
     args = parser.parse_args()
 
     baseline_path = args.baseline if args.baseline.exists() else DEFAULT_BASELINE
@@ -354,6 +377,29 @@ def main() -> int:
     )
     if len(rows) < args.limit:
         raise SystemExit(f"only selected {len(rows)} rows, need {args.limit}")
+    if meta.get("retained_bad_exit_ips") and not args.dry_run and not args.allow_retain_bad_exits:
+        result = {
+            "status": "blocked",
+            "reason": "retained_bad_exits_requires_more_clean_candidates",
+            "changed": False,
+            "baseline": str(baseline_path),
+            "input": str(input_path),
+            "requested_input": str(args.input),
+            "verify": str(args.verify),
+            "registrar_feedback": str(args.registrar_feedback),
+            "verify_bad_exit_ips": sorted(verify_failed),
+            "registrar_bad_exit_ips": sorted(registrar_failed),
+            "fallback_reason": fallback_reason,
+            "dry_run": args.dry_run,
+            **meta,
+        }
+        (ROOT / "captures").mkdir(parents=True, exist_ok=True)
+        (ROOT / "captures/ip_pool_refresh_latest.json").write_text(
+            json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return 2
     written = write_runtime(rows, args.worker_host, args.uuid, args.write_docs, args.dry_run)
     result = {
         "status": "ok",

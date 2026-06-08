@@ -317,6 +317,31 @@ print("ok")
     return run([sys.executable, "-c", script])
 
 
+def check_pool_refresh_retained_bad_guard() -> dict:
+    script = r"""
+from tools.ip_proxy_pool_refresh import select_rows
+
+baseline = [
+    {"raw": "turn://bad", "turn": "turn://bad", "exit_ip": "10.0.0.1", "kind": "turn", "clean": True, "success": True},
+    {"raw": "turn://good", "turn": "turn://good", "exit_ip": "10.0.0.2", "kind": "turn", "clean": True, "success": True},
+]
+candidates = []
+rows, meta = select_rows(
+    baseline,
+    candidates,
+    {"10.0.0.1"},
+    2,
+    "example.invalid",
+    "2523c510-9ff0-415b-9582-93949bfae7e3",
+)
+assert len(rows) == 2, rows
+assert meta["retained_bad_exit_ips"] == ["10.0.0.1"], meta
+assert rows[-1]["source"] == "baseline_retain_failed", rows
+print("ok")
+"""
+    return run([sys.executable, "-c", script])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--skip-docker", action="store_true")
@@ -344,6 +369,7 @@ def main() -> int:
         "flow_throttle_zero_delay": check_flow_throttle_zero_delay(),
         "bad_exit_precheck_skip": check_bad_exit_precheck_skip(),
         "registrar_feedback_diagnostics": check_registrar_feedback_diagnostics(),
+        "pool_refresh_retained_bad_guard": check_pool_refresh_retained_bad_guard(),
     }
     if args.skip_docker or shutil.which("docker") is None:
         checks["docker_compose_config"] = {"ok": True, "skipped": True}
