@@ -301,9 +301,12 @@ def select_rows(
         by_exit[str(exit_ip)] = item
         return True
 
-    for item in baseline:
-        if str(item.get("exit_ip")) not in bad_exit_ips:
-            add(item, "baseline")
+    baseline_good = [item for item in baseline if str(item.get("exit_ip")) not in bad_exit_ips]
+    baseline_priority = [item for item in baseline_good if pool_priority(item) <= 1]
+    baseline_fallback = [item for item in baseline_good if pool_priority(item) > 1]
+
+    for item in baseline_priority:
+        add(item, "baseline")
 
     added_from_candidates = 0
     for item in candidates:
@@ -311,6 +314,14 @@ def select_rows(
             added_from_candidates += 1
         if len(selected) >= limit:
             break
+
+    retained_low_priority_baseline = 0
+    if len(selected) < limit:
+        for item in baseline_fallback:
+            if add(item, "baseline_low_priority"):
+                retained_low_priority_baseline += 1
+            if len(selected) >= limit:
+                break
 
     if len(selected) < limit:
         for item in baseline:
@@ -336,6 +347,8 @@ def select_rows(
     return selected, {
         "bad_exit_ips": sorted(bad_exit_ips),
         "added_from_candidates": added_from_candidates,
+        "retained_priority_baseline": sum(1 for row in selected if row.get("source") == "baseline"),
+        "retained_low_priority_baseline": retained_low_priority_baseline,
         "retained_bad_exit_ips": retained_bad_exit_ips,
         "retained_bad_exit_details": retained_bad_exit_details,
         "selected": len(selected),

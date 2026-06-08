@@ -396,6 +396,35 @@ print("ok")
     return run([sys.executable, "-c", script])
 
 
+def check_pool_refresh_replaces_low_priority_baseline() -> dict:
+    script = r"""
+from tools.ip_proxy_pool_refresh import select_rows
+
+baseline = [
+    {"raw": "turn://base-res", "turn": "turn://base-res", "exit_ip": "10.0.0.1", "kind": "turn", "clean": True, "success": True, "company_type": "ISP", "asn_type": "ISP"},
+    {"raw": "turn://base-hosting", "turn": "turn://base-hosting", "exit_ip": "10.0.0.2", "kind": "turn", "clean": True, "success": True, "company_type": "hosting", "asn_type": "hosting"},
+]
+candidates = [
+    {"raw": "turn://new-res", "turn": "turn://new-res", "exit_ip": "10.0.0.3", "kind": "turn", "clean": True, "success": True, "company_type": "ISP", "asn_type": "ISP"},
+]
+rows, meta = select_rows(
+    baseline,
+    candidates,
+    set(),
+    2,
+    "example.invalid",
+    "2523c510-9ff0-415b-9582-93949bfae7e3",
+)
+assert [row["raw"] for row in rows] == ["turn://base-res", "turn://new-res"], rows
+assert meta["added_from_candidates"] == 1, meta
+assert meta["retained_priority_baseline"] == 1, meta
+assert meta["retained_low_priority_baseline"] == 0, meta
+assert rows[1]["source"] == "clean_latest", rows
+print("ok")
+"""
+    return run([sys.executable, "-c", script])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--skip-docker", action="store_true")
@@ -427,6 +456,7 @@ def main() -> int:
         "pool_refresh_retained_bad_guard": check_pool_refresh_retained_bad_guard(),
         "source_quality_summary": check_source_quality_summary(),
         "source_quality_pool_priority": check_source_quality_pool_priority(),
+        "pool_refresh_replaces_low_priority_baseline": check_pool_refresh_replaces_low_priority_baseline(),
     }
     if args.skip_docker or shutil.which("docker") is None:
         checks["docker_compose_config"] = {"ok": True, "skipped": True}
