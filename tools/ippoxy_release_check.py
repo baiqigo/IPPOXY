@@ -25,6 +25,7 @@ REQUIRED_FILES = [
     "tools/ippoxy_sandbox_batch_verify.py",
     "tools/ip_proxy_pool_refresh.py",
     "tools/ip_proxy_refill_once.sh",
+    "tools/ip_proxy_source_quality_report.py",
     "docker-compose.yml",
 ]
 
@@ -59,6 +60,7 @@ def check_imports() -> dict:
         "tools.ip_proxy_registrar_feedback",
         "tools.ippoxy_sandbox_batch_verify",
         "tools.ip_proxy_pool_refresh",
+        "tools.ip_proxy_source_quality_report",
         "challenge_providers.router",
     ]
     imported = []
@@ -342,6 +344,28 @@ print("ok")
     return run([sys.executable, "-c", script])
 
 
+def check_source_quality_summary() -> dict:
+    script = r"""
+from tools.ip_proxy_source_quality_report import summarize_source_quality
+
+rows = [
+    {"source": "source_a", "kind": "turn", "success": True, "clean": True, "exit_ip": "10.0.0.1"},
+    {"source": "source_a", "kind": "turn", "success": True, "clean": False, "exit_ip": "10.0.0.2", "dirty": ["is_proxy"]},
+    {"source": "source_b", "kind": "socks5", "success": False, "clean": False, "error": "timeout"},
+]
+summary = summarize_source_quality(rows)
+assert summary["total"] == 3, summary
+assert summary["clean"] == 1, summary
+assert summary["by_source"]["source_a"]["total"] == 2, summary
+assert summary["by_source"]["source_a"]["clean"] == 1, summary
+assert summary["by_source"]["source_a"]["dirty_reasons"]["is_proxy"] == 1, summary
+assert summary["by_source"]["source_b"]["errors"]["timeout"] == 1, summary
+assert summary["top_sources_by_clean"][0] == "source_a", summary
+print("ok")
+"""
+    return run([sys.executable, "-c", script])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--skip-docker", action="store_true")
@@ -361,6 +385,7 @@ def main() -> int:
                 "tools/ip_proxy_registrar_feedback.py",
                 "tools/ippoxy_sandbox_batch_verify.py",
                 "tools/ip_proxy_pool_refresh.py",
+                "tools/ip_proxy_source_quality_report.py",
             ]
         ),
         "imports": check_imports(),
@@ -370,6 +395,7 @@ def main() -> int:
         "bad_exit_precheck_skip": check_bad_exit_precheck_skip(),
         "registrar_feedback_diagnostics": check_registrar_feedback_diagnostics(),
         "pool_refresh_retained_bad_guard": check_pool_refresh_retained_bad_guard(),
+        "source_quality_summary": check_source_quality_summary(),
     }
     if args.skip_docker or shutil.which("docker") is None:
         checks["docker_compose_config"] = {"ok": True, "skipped": True}
