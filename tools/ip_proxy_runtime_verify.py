@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from collections import Counter
 from pathlib import Path
 
 
@@ -128,6 +129,68 @@ def make_identities(platform: str, count: int, run_id: str) -> list[str]:
     return [f"{platform}.verify-{run_id}-{index:02d}" for index in range(max(0, count))]
 
 
+def duplicate_counts(values: list[str]) -> dict[str, int]:
+    counter = Counter(value for value in values if value)
+    return dict(sorted((value, count) for value, count in counter.items() if count > 1))
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def runtime_failure_reasons(result: dict, gates: dict) -> list[dict]:
+    reasons: list[dict] = []
+    checks = [
+        ("ports_failed", "ports_ok", "min_ports_ok"),
+        ("resin_identity_failed", "resin_ok", "min_resin_ok"),
+        ("insufficient_unique_res_exits", "unique_res_exit_count", "min_unique_res_exits"),
+    ]
+    if gates.get("require_target_ok"):
+        checks.insert(2, ("resin_target_failed", "resin_target_ok", "min_resin_target_ok"))
+    for reason, actual_key, expected_key in checks:
+        actual = int(result.get(actual_key) or 0)
+        expected = int(gates.get(expected_key) or 0)
+        if actual < expected:
+            reasons.append(
+                {
+                    "reason": reason,
+                    "actual_key": actual_key,
+                    "actual": actual,
+                    "expected_key": expected_key,
+                    "expected": expected,
+                }
+            )
+    bad_exit_hits = int(result.get("resin_bad_exit_hits") or 0)
+    max_bad_exit_hits = int(gates.get("max_bad_exit_hits") or 0)
+    if bad_exit_hits > max_bad_exit_hits:
+        reasons.append(
+            {
+                "reason": "bad_exit_hit",
+                "actual_key": "resin_bad_exit_hits",
+                "actual": bad_exit_hits,
+                "expected_key": "max_bad_exit_hits",
+                "expected": max_bad_exit_hits,
+            }
+        )
+    if gates.get("require_one_exit_per_port") and not result.get("mapping_one_exit_per_port"):
+        reasons.append(
+            {
+                "reason": "mapping_not_one_exit_per_port",
+                "actual_key": "mapping_one_exit_per_port",
+                "actual": bool(result.get("mapping_one_exit_per_port")),
+                "expected": True,
+                "mapping_rows": result.get("mapping_rows"),
+                "unique_expected_exit_count": result.get("mapping_unique_expected_exit_count"),
+                "duplicate_expected_exit_ips": result.get("mapping_duplicate_expected_exit_ips") or {},
+                "duplicate_ports": result.get("mapping_duplicate_ports") or {},
+            }
+        )
+    return reasons
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--workers", type=int, default=int(os.environ.get("IP_PROXY_VERIFY_WORKERS", "12")))
@@ -138,13 +201,41 @@ def main() -> None:
     parser.add_argument("--static-identities", type=int, default=int(os.environ.get("IP_PROXY_VERIFY_STATIC_IDENTITIES", "8")))
     parser.add_argument("--all-identities", type=int, default=int(os.environ.get("IP_PROXY_VERIFY_ALL_IDENTITIES", "8")))
     parser.add_argument("--min-unique-res-exits", type=int, default=int(os.environ.get("IP_PROXY_MIN_UNIQUE_RES_EXITS", "12")))
+    parser.add_argument(
+        "--min-resin-target-ok",
+        default=os.environ.get("IP_PROXY_MIN_RESIN_TARGET_OK"),
+        help="Minimum Resin identities that must reach the neutral target URL. Defaults to all Resin tests when target gate is required.",
+    )
     parser.add_argument("--ip-url", default=IPIFY_URL, help="Neutral endpoint returning the observed exit IP.")
     parser.add_argument("--target-url", default=TARGET_URL, help="Neutral target endpoint used for routed HTTP status checks.")
+    parser.add_argument(
+        "--require-target-ok",
+        dest="require_target_ok",
+        action="store_true",
+        default=env_bool("IP_PROXY_REQUIRE_TARGET_OK", True),
+        help="Fail if Resin identities do not reach --target-url successfully. Enabled by default.",
+    )
+    parser.add_argument(
+        "--no-require-target-ok",
+        dest="require_target_ok",
+        action="store_false",
+        help="Disable the target reachability gate for diagnostics only.",
+    )
+    parser.add_argument(
+        "--require-one-exit-per-port",
+        action="store_true",
+        default=env_bool("IP_PROXY_REQUIRE_ONE_EXIT_PER_PORT", False),
+        help="Fail if the runtime mapping does not assign one unique expected exit IP per local Xray port.",
+    )
     parser.add_argument("--run-id", default=time.strftime("%Y%m%d%H%M%S", time.gmtime()))
     args = parser.parse_args()
     target_timeout = args.signup_timeout if args.signup_timeout is not None else args.target_timeout
 
     rows = json.loads(MAPPING.read_text(encoding="utf-8"))
+    expected_exit_ips = [str(row.get("exit_ip") or "").strip() for row in rows if isinstance(row, dict)]
+    expected_ports = [str(row.get("local_port") or "").strip() for row in rows if isinstance(row, dict)]
+    duplicate_expected_exit_ips = duplicate_counts(expected_exit_ips)
+    duplicate_expected_ports = duplicate_counts(expected_ports)
     bad_exit_ips = registrar_bad_exit_ips(REGISTRAR_FEEDBACK)
     port_results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
@@ -182,6 +273,11 @@ def main() -> None:
     result = {
         "ts": int(time.time()),
         "mapping_file": str(MAPPING),
+        "mapping_rows": len(rows),
+        "mapping_unique_expected_exit_count": len({ip for ip in expected_exit_ips if ip}),
+        "mapping_duplicate_expected_exit_ips": duplicate_expected_exit_ips,
+        "mapping_duplicate_ports": duplicate_expected_ports,
+        "mapping_one_exit_per_port": len(rows) == len({ip for ip in expected_exit_ips if ip}) == len({port for port in expected_ports if port}),
         "registrar_feedback": str(REGISTRAR_FEEDBACK),
         "verify_ip_url": args.ip_url,
         "verify_target_url": args.target_url,
@@ -203,6 +299,27 @@ def main() -> None:
     result["unique_res_exit_count"] = len(result["unique_res_exit_ips"])
     result["unique_static_exit_count"] = len(result["unique_static_exit_ips"])
     result["unique_all_exit_count"] = len(result["unique_all_exit_ips"])
+    successful_port_got_ips = [str(item.get("got") or "").strip() for item in port_results if item.get("ok")]
+    result["ports_unique_got_exit_count"] = len(set(successful_port_got_ips))
+    result["ports_duplicate_got_exit_ips"] = duplicate_counts(successful_port_got_ips)
+    min_ports_ok = int(os.environ.get("IP_PROXY_MIN_PORTS_OK", "23"))
+    min_resin_ok = int(os.environ.get("IP_PROXY_MIN_RESIN_OK", str(len(identities))))
+    if args.min_resin_target_ok is None:
+        min_resin_target_ok = len(identities) if args.require_target_ok else 0
+    else:
+        min_resin_target_ok = int(args.min_resin_target_ok)
+    gates = {
+        "min_ports_ok": min_ports_ok,
+        "min_resin_ok": min_resin_ok,
+        "min_resin_target_ok": min_resin_target_ok,
+        "min_unique_res_exits": args.min_unique_res_exits,
+        "max_bad_exit_hits": 0,
+        "require_target_ok": args.require_target_ok,
+        "require_one_exit_per_port": args.require_one_exit_per_port,
+    }
+    result.update(gates)
+    result["failure_reasons"] = runtime_failure_reasons(result, gates)
+    result["status"] = "failed" if result["failure_reasons"] else "ok"
     captures = ROOT / "captures"
     captures.mkdir(parents=True, exist_ok=True)
     (captures / "ip_runtime_verify_latest.json").write_text(
@@ -210,14 +327,7 @@ def main() -> None:
         encoding="utf-8",
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    min_ports_ok = int(os.environ.get("IP_PROXY_MIN_PORTS_OK", "23"))
-    min_resin_ok = int(os.environ.get("IP_PROXY_MIN_RESIN_OK", str(len(identities))))
-    if (
-        result["ports_ok"] < min_ports_ok
-        or result["resin_ok"] < min_resin_ok
-        or result["resin_bad_exit_hits"] > 0
-        or result["unique_res_exit_count"] < args.min_unique_res_exits
-    ):
+    if result["failure_reasons"]:
         sys.exit(1)
 
 

@@ -9,7 +9,23 @@ WORKERS="${WORKERS:-10}"
 TIMEOUT="${TIMEOUT:-12}"
 MAX_CHECK="${MAX_CHECK:-240}"
 MAX_CHECK_PER_SOURCE="${MAX_CHECK_PER_SOURCE:-80}"
+MAX_CHECK_PER_KIND="${MAX_CHECK_PER_KIND:-0}"
 MAX_SOCKS_PER_SOURCE="${MAX_SOCKS_PER_SOURCE:-200}"
+ONLY_KIND="${ONLY_KIND:-}"
+INCLUDE_COOLDOWN_SOURCES="${INCLUDE_COOLDOWN_SOURCES:-0}"
+RELAX_SOURCE_CAP="${RELAX_SOURCE_CAP:-0}"
+IP_PROXY_POOL_MODE="${IP_PROXY_POOL_MODE:-strict}"
+IP_PROXY_MIN_CLEAN="${IP_PROXY_MIN_CLEAN:-12}"
+IP_PROXY_MIN_NEW_CANDIDATES="${IP_PROXY_MIN_NEW_CANDIDATES:-8}"
+IP_PROXY_EXCLUDE_COUNTRY="${IP_PROXY_EXCLUDE_COUNTRY:-}"
+IP_PROXY_MAX_RESPONSE_TIME="${IP_PROXY_MAX_RESPONSE_TIME:-0}"
+IP_PROXY_MAX_RISKY_CANDIDATES="${IP_PROXY_MAX_RISKY_CANDIDATES:-10}"
+IP_PROXY_MAX_RISKY_RATIO="${IP_PROXY_MAX_RISKY_RATIO:-0.40}"
+IP_PROXY_MIN_STRICT_CLEAN_SELECTED="${IP_PROXY_MIN_STRICT_CLEAN_SELECTED:-12}"
+IP_PROXY_MIN_COUNTRIES="${IP_PROXY_MIN_COUNTRIES:-8}"
+IP_PROXY_MAX_COUNTRY_RATIO="${IP_PROXY_MAX_COUNTRY_RATIO:-0.40}"
+IP_PROXY_MAX_COMPANY_RATIO="${IP_PROXY_MAX_COMPANY_RATIO:-0.24}"
+IP_PROXY_MAX_ASN_RATIO="${IP_PROXY_MAX_ASN_RATIO:-0.24}"
 WITH_GROK="${WITH_GROK:-0}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
@@ -23,13 +39,31 @@ if [[ "$WITH_GROK" == "1" ]]; then
   fi
 fi
 
-"$PYTHON_BIN" tools/ip_proxy_candidate_harvest.py \
+HARVEST_ARGS=(
   --run-id "$RUN_ID" \
   --workers "$WORKERS" \
   --timeout "$TIMEOUT" \
   --max-check "$MAX_CHECK" \
   --max-check-per-source "$MAX_CHECK_PER_SOURCE" \
+  --max-check-per-kind "$MAX_CHECK_PER_KIND" \
   --max-socks-per-source "$MAX_SOCKS_PER_SOURCE"
+)
+if [[ "$INCLUDE_COOLDOWN_SOURCES" == "1" ]]; then
+  HARVEST_ARGS+=(--include-cooldown-sources)
+fi
+if [[ "$RELAX_SOURCE_CAP" == "1" ]]; then
+  HARVEST_ARGS+=(--relax-source-cap)
+fi
+if [[ -n "$ONLY_KIND" ]]; then
+  IFS=',' read -ra ONLY_KIND_ITEMS <<< "$ONLY_KIND"
+  for KIND in "${ONLY_KIND_ITEMS[@]}"; do
+    if [[ -n "$KIND" ]]; then
+      HARVEST_ARGS+=(--only-kind "$KIND")
+    fi
+  done
+fi
+
+"$PYTHON_BIN" tools/ip_proxy_candidate_harvest.py "${HARVEST_ARGS[@]}"
 
 "$PYTHON_BIN" tools/ip_proxy_classify_clean.py \
   --run-id "$RUN_ID" \
@@ -40,7 +74,50 @@ fi
 
 "$PYTHON_BIN" tools/ip_proxy_registrar_feedback.py || true
 
-POOL_REFRESH_ARGS=(--input ".runtime/ip-proxy/resin/clean_candidates_classified.latest.json")
+if [[ "$IP_PROXY_POOL_MODE" == "auto" ]]; then
+  POOL_MODE="$(IP_PROXY_MIN_CLEAN="$IP_PROXY_MIN_CLEAN" "$PYTHON_BIN" -c 'import json, os; from pathlib import Path
+root=Path(".runtime/ip-proxy/resin")
+strict=root/"clean_candidates_classified.latest.json"
+relaxed=root/"relaxed_candidates_classified.latest.json"
+min_clean=int(os.environ.get("IP_PROXY_MIN_CLEAN", "12"))
+def turn_count(path, tiers):
+    if not path.exists():
+        return 0
+    rows=json.loads(path.read_text(encoding="utf-8-sig"))
+    return sum(1 for r in rows if isinstance(r, dict) and r.get("kind")=="turn" and r.get("success") and r.get("raw") and r.get("exit_ip") and str(r.get("registration_tier") or "").lower() in tiers)
+strict_count=turn_count(strict, {"clean"})
+relaxed_count=turn_count(relaxed, {"clean","risky"})
+print("relaxed" if strict_count < min_clean <= relaxed_count else "strict")')"
+else
+  POOL_MODE="$IP_PROXY_POOL_MODE"
+fi
+if [[ "$POOL_MODE" != "strict" && "$POOL_MODE" != "relaxed" ]]; then
+  echo "{\"status\":\"error\",\"reason\":\"invalid_IP_PROXY_POOL_MODE\",\"value\":\"$IP_PROXY_POOL_MODE\"}"
+  exit 2
+fi
+
+POOL_REFRESH_INPUT=".runtime/ip-proxy/resin/clean_candidates_classified.latest.json"
+if [[ "$POOL_MODE" == "relaxed" ]]; then
+  POOL_REFRESH_INPUT=".runtime/ip-proxy/resin/relaxed_candidates_classified.latest.json"
+fi
+POOL_REFRESH_ARGS=(
+  --input "$POOL_REFRESH_INPUT"
+  --pool-mode "$POOL_MODE"
+  --min-clean "$IP_PROXY_MIN_CLEAN"
+  --min-new-candidates "$IP_PROXY_MIN_NEW_CANDIDATES"
+  --exclude-country "$IP_PROXY_EXCLUDE_COUNTRY"
+  --max-response-time "$IP_PROXY_MAX_RESPONSE_TIME"
+  --max-risky-candidates "$IP_PROXY_MAX_RISKY_CANDIDATES"
+  --max-risky-ratio "$IP_PROXY_MAX_RISKY_RATIO"
+  --min-strict-clean-selected "$IP_PROXY_MIN_STRICT_CLEAN_SELECTED"
+  --min-countries "$IP_PROXY_MIN_COUNTRIES"
+  --max-country-ratio "$IP_PROXY_MAX_COUNTRY_RATIO"
+  --max-company-ratio "$IP_PROXY_MAX_COMPANY_RATIO"
+  --max-asn-ratio "$IP_PROXY_MAX_ASN_RATIO"
+)
+if [[ "${IP_PROXY_ALLOW_SELECTION_QUALITY_FAILURES:-0}" == "1" ]]; then
+  POOL_REFRESH_ARGS+=(--allow-selection-quality-failures)
+fi
 if [[ "${IP_PROXY_APPLY_RUNTIME:-1}" != "1" ]]; then
   POOL_REFRESH_ARGS+=(--dry-run)
 fi
@@ -54,4 +131,4 @@ if [[ "${IP_PROXY_APPLY_RUNTIME:-1}" == "1" && "$POOL_CHANGED" == "1" ]]; then
   "$PYTHON_BIN" tools/ip_proxy_resin_configure.py
 fi
 
-echo "{\"run_id\":\"$RUN_ID\",\"status\":\"ok\"}"
+echo "{\"run_id\":\"$RUN_ID\",\"status\":\"ok\",\"pool_mode\":\"$POOL_MODE\"}"

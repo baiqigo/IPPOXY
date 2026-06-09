@@ -21,7 +21,9 @@ RESIN_DIR = ROOT / "docs/ip-proxy/resin"
 DOC_RUNTIME_DIR = ROOT / "docs/ip-proxy/research/runtime"
 RUNTIME_RESIN_DIR = RUNTIME / "resin"
 
-DEFAULT_INPUT = RUNTIME_RESIN_DIR / "clean_candidates_classified.latest.json"
+DEFAULT_STRICT_INPUT = RUNTIME_RESIN_DIR / "clean_candidates_classified.latest.json"
+DEFAULT_RELAXED_INPUT = RUNTIME_RESIN_DIR / "relaxed_candidates_classified.latest.json"
+DEFAULT_INPUT = DEFAULT_STRICT_INPUT
 DEFAULT_BASELINE = DOC_RUNTIME_DIR / "turn_xray_pool_20260608.json"
 DEFAULT_VERIFY = ROOT / "captures/ip_runtime_verify_latest.json"
 DEFAULT_REGISTRAR_FEEDBACK = ROOT / "captures/ip_registrar_feedback_latest.json"
@@ -29,6 +31,16 @@ DEFAULT_SOURCE_QUALITY = RUNTIME / "research/proxy_source_quality_latest.json"
 DEFAULT_WORKER_HOST = os.environ.get("IP_PROXY_TURN_WORKER_HOST", "cdn.baiqi.xyz")
 DEFAULT_UUID = "2523c510-9ff0-415b-9582-93949bfae7e3"
 DEFAULT_MAX_FALLBACK_CANDIDATE_AGE_HOURS = float(os.environ.get("IP_PROXY_MAX_FALLBACK_CANDIDATE_AGE_HOURS", "48"))
+ALLOWED_POOL_MODES = {"strict", "relaxed"}
+RISKY_DIRTY_FLAGS = {"is_datacenter", "is_proxy", "is_vpn"}
+HARD_DIRTY_FLAGS = {"is_tor", "is_abuser", "is_bogon"}
+DEFAULT_MAX_RISKY_CANDIDATES = int(os.environ.get("IP_PROXY_MAX_RISKY_CANDIDATES", "10"))
+DEFAULT_MAX_RISKY_RATIO = float(os.environ.get("IP_PROXY_MAX_RISKY_RATIO", "0.40") or "0")
+DEFAULT_MIN_STRICT_CLEAN_SELECTED = int(os.environ.get("IP_PROXY_MIN_STRICT_CLEAN_SELECTED", "12"))
+DEFAULT_MIN_COUNTRIES = int(os.environ.get("IP_PROXY_MIN_COUNTRIES", "8"))
+DEFAULT_MAX_COUNTRY_RATIO = float(os.environ.get("IP_PROXY_MAX_COUNTRY_RATIO", "0.40") or "0")
+DEFAULT_MAX_COMPANY_RATIO = float(os.environ.get("IP_PROXY_MAX_COMPANY_RATIO", "0.24") or "0")
+DEFAULT_MAX_ASN_RATIO = float(os.environ.get("IP_PROXY_MAX_ASN_RATIO", "0.24") or "0")
 
 
 def slug(value: str) -> str:
@@ -47,9 +59,12 @@ def classify(item: dict) -> str:
 
 
 def pool_priority(item: dict) -> int:
+    tier = str(item.get("registration_tier") or "").lower()
     company_type = (item.get("company_type") or "").lower()
     asn_type = (item.get("asn_type") or "").lower()
     type_text = f"{company_type} {asn_type}"
+    if tier == "risky":
+        return 4
     if company_type == "isp" and asn_type == "isp":
         return 0
     if "isp" in {company_type, asn_type}:
@@ -152,6 +167,12 @@ def safe_float(value: object) -> float:
         return 0.0
 
 
+def split_csv_values(value: str | None) -> set[str]:
+    if not value:
+        return set()
+    return {part.strip().upper() for part in value.split(",") if part.strip()}
+
+
 def file_sha(path: Path) -> str | None:
     if not path.exists():
         return None
@@ -169,7 +190,68 @@ def atomic_write_text(path: Path, text: str) -> None:
     tmp.replace(path)
 
 
-def clean_turn_candidates(path: Path) -> list[dict]:
+def dirty_flags(item: dict) -> set[str]:
+    values = item.get("dirty") or []
+    if not isinstance(values, list):
+        return set()
+    return {str(value).strip() for value in values if str(value).strip()}
+
+
+def normalized_group_value(value: object, fallback: str = "unknown") -> str:
+    text = str(value or "").strip()
+    return text or fallback
+
+
+def country_key(item: dict) -> str:
+    return normalized_group_value(item.get("country"), "XX").upper()
+
+
+def company_key(item: dict) -> str:
+    return normalized_group_value(item.get("company"), "unknown").lower()
+
+
+def raw_result_asn(item: dict) -> object:
+    raw_result = item.get("raw_result")
+    if not isinstance(raw_result, dict):
+        return None
+    exit_data = raw_result.get("exit")
+    if not isinstance(exit_data, dict):
+        return None
+    asn = exit_data.get("asn")
+    if isinstance(asn, dict):
+        return asn.get("asn")
+    return asn
+
+
+def asn_key(item: dict) -> str:
+    return normalized_group_value(
+        item.get("asn")
+        or item.get("asn_number")
+        or raw_result_asn(item)
+        or item.get("exit_ip"),
+        "unknown",
+    )
+
+
+def candidate_tier(item: dict) -> str:
+    if not item.get("success"):
+        return "dirty"
+    dirty = dirty_flags(item)
+    if dirty & HARD_DIRTY_FLAGS:
+        return "dirty"
+    if dirty:
+        return "risky" if dirty <= RISKY_DIRTY_FLAGS else "dirty"
+    tier = str(item.get("registration_tier") or "").strip().lower()
+    if tier in {"clean", "risky", "dirty"}:
+        return tier
+    if item.get("clean") and item.get("success"):
+        return "clean"
+    return "clean"
+
+
+def turn_candidates(path: Path, pool_mode: str = "strict") -> list[dict]:
+    if pool_mode not in ALLOWED_POOL_MODES:
+        raise ValueError(f"invalid pool_mode={pool_mode!r}")
     data = read_json(path, [])
     if not isinstance(data, list):
         return []
@@ -177,13 +259,60 @@ def clean_turn_candidates(path: Path) -> list[dict]:
     for item in data:
         if not isinstance(item, dict):
             continue
-        if item.get("kind") != "turn" or not item.get("clean") or not item.get("success"):
+        if item.get("kind") != "turn" or not item.get("success"):
             continue
         if not item.get("raw") or not item.get("exit_ip"):
             continue
-        out.append(dict(item))
-    out.sort(key=lambda item: (item.get("responseTime") or 999999, item.get("raw") or ""))
+        tier = candidate_tier(item)
+        if tier == "dirty":
+            continue
+        if pool_mode == "strict" and tier != "clean":
+            continue
+        row = dict(item)
+        row["registration_tier"] = tier
+        row["registration_eligible"] = True
+        row["relaxed_pool"] = pool_mode == "relaxed"
+        out.append(row)
+    out.sort(key=lambda item: (pool_priority(item), item.get("responseTime") or 999999, item.get("raw") or ""))
     return out
+
+
+def filter_candidates(
+    candidates: list[dict],
+    *,
+    exclude_countries: set[str] | None = None,
+    max_response_time: float = 0.0,
+) -> tuple[list[dict], dict]:
+    exclude_countries = exclude_countries or set()
+    out: list[dict] = []
+    excluded_country = 0
+    excluded_response_time = 0
+    for item in candidates:
+        country = str(item.get("country") or "").upper()
+        if exclude_countries and country in exclude_countries:
+            excluded_country += 1
+            continue
+        response_time = safe_float(item.get("responseTime"))
+        if max_response_time > 0 and response_time > max_response_time:
+            excluded_response_time += 1
+            continue
+        out.append(item)
+    return out, {
+        "before_filter": len(candidates),
+        "after_filter": len(out),
+        "excluded_country": excluded_country,
+        "excluded_response_time": excluded_response_time,
+        "exclude_countries": sorted(exclude_countries),
+        "max_response_time": max_response_time,
+    }
+
+
+def clean_turn_candidates(path: Path) -> list[dict]:
+    return turn_candidates(path, "strict")
+
+
+def default_input_for_pool_mode(pool_mode: str) -> Path:
+    return DEFAULT_RELAXED_INPUT if pool_mode == "relaxed" else DEFAULT_STRICT_INPUT
 
 
 def file_age_hours(path: Path, now: float | None = None) -> float | None:
@@ -201,6 +330,7 @@ def candidate_file_audit(
     min_clean: int,
     max_age_hours: float,
     allow_stale: bool,
+    filter_meta: dict | None = None,
     now: float | None = None,
 ) -> dict:
     age_hours = file_age_hours(path, now)
@@ -219,11 +349,14 @@ def candidate_file_audit(
     return {
         "path": str(path),
         "role": role,
-        "clean_turn_candidates": len(candidates),
+        "candidate_count": len(candidates),
+        "clean_turn_candidates": sum(1 for item in candidates if candidate_tier(item) == "clean"),
+        "risky_turn_candidates": sum(1 for item in candidates if candidate_tier(item) == "risky"),
         "min_clean": min_clean,
         "age_hours": age_hours,
         "max_age_hours": max_age_hours,
         "allow_stale": allow_stale,
+        "filters": filter_meta or {},
         "accepted": bool(enough_clean and fresh_enough),
         "reason": reason,
     }
@@ -255,8 +388,151 @@ def source_quality_sort_key(item: dict, source_quality: dict[str, dict] | None) 
 
 def prioritize_candidates(candidates: list[dict], source_quality: dict[str, dict] | None) -> list[dict]:
     if not source_quality:
-        return candidates
-    return sorted(candidates, key=lambda item: source_quality_sort_key(item, source_quality))
+        return diversify_candidates(candidates)
+    return diversify_candidates(sorted(candidates, key=lambda item: source_quality_sort_key(item, source_quality)))
+
+
+def diversify_candidates(candidates: list[dict]) -> list[dict]:
+    """Spread otherwise similar candidates across country/company/ASN groups."""
+    remaining = list(enumerate(candidates))
+    out: list[dict] = []
+    country_counts: collections.Counter[str] = collections.Counter()
+    company_counts: collections.Counter[str] = collections.Counter()
+    asn_counts: collections.Counter[str] = collections.Counter()
+    while remaining:
+        best_index, (original_index, item) = min(
+            enumerate(remaining),
+            key=lambda row: (
+                pool_priority(row[1][1]),
+                country_counts[country_key(row[1][1])],
+                asn_counts[asn_key(row[1][1])],
+                company_counts[company_key(row[1][1])],
+                row[1][0],
+                safe_float(row[1][1].get("responseTime")) or 999999,
+                row[1][1].get("raw") or "",
+            ),
+        )
+        remaining.pop(best_index)
+        out.append(item)
+        country_counts[country_key(item)] += 1
+        company_counts[company_key(item)] += 1
+        asn_counts[asn_key(item)] += 1
+    return out
+
+
+def counter_dict(counter: collections.Counter[str]) -> dict[str, int]:
+    return {key: count for key, count in sorted(counter.items(), key=lambda row: (-row[1], row[0]))}
+
+
+def top_counter_item(counter: collections.Counter[str], total: int) -> dict:
+    if not counter or total <= 0:
+        return {"value": "", "count": 0, "ratio": 0.0}
+    value, count = sorted(counter.items(), key=lambda row: (-row[1], row[0]))[0]
+    return {"value": value, "count": count, "ratio": round(count / total, 4)}
+
+
+def selection_quality_report(rows: list[dict]) -> dict:
+    total = len(rows)
+    tier_counts = collections.Counter(str(row.get("registration_tier") or "unknown") for row in rows)
+    country_counts = collections.Counter(country_key(row) for row in rows)
+    company_counts = collections.Counter(company_key(row) for row in rows)
+    asn_counts = collections.Counter(asn_key(row) for row in rows)
+    risky = tier_counts.get("risky", 0)
+    clean = tier_counts.get("clean", 0)
+    return {
+        "total": total,
+        "clean_selected": clean,
+        "risky_selected": risky,
+        "risky_ratio": round(risky / total, 4) if total else 0.0,
+        "tier_counts": counter_dict(tier_counts),
+        "unique_country_count": len(country_counts),
+        "unique_company_count": len(company_counts),
+        "unique_asn_count": len(asn_counts),
+        "country_counts": counter_dict(country_counts),
+        "company_counts": counter_dict(company_counts),
+        "asn_counts": counter_dict(asn_counts),
+        "top_country": top_counter_item(country_counts, total),
+        "top_company": top_counter_item(company_counts, total),
+        "top_asn": top_counter_item(asn_counts, total),
+    }
+
+
+def selection_quality_gate_config(args: argparse.Namespace) -> dict:
+    return {
+        "max_risky_candidates": args.max_risky_candidates,
+        "max_risky_ratio": args.max_risky_ratio,
+        "min_strict_clean_selected": args.min_strict_clean_selected,
+        "min_countries": args.min_countries,
+        "max_country_ratio": args.max_country_ratio,
+        "max_company_ratio": args.max_company_ratio,
+        "max_asn_ratio": args.max_asn_ratio,
+        "allow_selection_quality_failures": args.allow_selection_quality_failures,
+    }
+
+
+def selection_quality_violations(quality: dict, gate: dict) -> list[dict]:
+    violations: list[dict] = []
+    risky_selected = safe_int(quality.get("risky_selected"))
+    max_risky_candidates = safe_int(gate.get("max_risky_candidates"))
+    if max_risky_candidates >= 0 and risky_selected > max_risky_candidates:
+        violations.append(
+            {
+                "field": "risky_selected",
+                "actual": risky_selected,
+                "limit": max_risky_candidates,
+                "reason": "too_many_risky_candidates",
+            }
+        )
+    max_risky_ratio = safe_float(gate.get("max_risky_ratio"))
+    if max_risky_ratio > 0 and safe_float(quality.get("risky_ratio")) > max_risky_ratio:
+        violations.append(
+            {
+                "field": "risky_ratio",
+                "actual": quality.get("risky_ratio"),
+                "limit": max_risky_ratio,
+                "reason": "risky_ratio_too_high",
+            }
+        )
+    min_strict_clean_selected = safe_int(gate.get("min_strict_clean_selected"))
+    if min_strict_clean_selected > 0 and safe_int(quality.get("clean_selected")) < min_strict_clean_selected:
+        violations.append(
+            {
+                "field": "clean_selected",
+                "actual": quality.get("clean_selected"),
+                "limit": min_strict_clean_selected,
+                "reason": "not_enough_strict_clean_selected",
+            }
+        )
+    min_countries = safe_int(gate.get("min_countries"))
+    if min_countries > 0 and safe_int(quality.get("unique_country_count")) < min_countries:
+        violations.append(
+            {
+                "field": "unique_country_count",
+                "actual": quality.get("unique_country_count"),
+                "limit": min_countries,
+                "reason": "not_enough_country_diversity",
+            }
+        )
+    for field, gate_field, reason in (
+        ("top_country", "max_country_ratio", "country_concentration_too_high"),
+        ("top_company", "max_company_ratio", "company_concentration_too_high"),
+        ("top_asn", "max_asn_ratio", "asn_concentration_too_high"),
+    ):
+        limit = safe_float(gate.get(gate_field))
+        top = quality.get(field) if isinstance(quality.get(field), dict) else {}
+        actual = safe_float(top.get("ratio"))
+        if limit > 0 and actual > limit:
+            violations.append(
+                {
+                    "field": f"{field}.ratio",
+                    "actual": actual,
+                    "limit": limit,
+                    "value": top.get("value"),
+                    "count": top.get("count"),
+                    "reason": reason,
+                }
+            )
+    return violations
 
 
 def resolve_candidate_input(
@@ -265,9 +541,18 @@ def resolve_candidate_input(
     source_quality: dict[str, dict] | None = None,
     max_age_hours: float = DEFAULT_MAX_FALLBACK_CANDIDATE_AGE_HOURS,
     allow_stale: bool = False,
+    pool_mode: str = "strict",
+    exclude_countries: set[str] | None = None,
+    max_response_time: float = 0.0,
 ) -> tuple[Path, list[dict], str | None, list[dict]]:
     audit: list[dict] = []
-    candidates = prioritize_candidates(clean_turn_candidates(path), source_quality)
+    raw_candidates = turn_candidates(path, pool_mode)
+    candidates, filter_meta = filter_candidates(
+        raw_candidates,
+        exclude_countries=exclude_countries,
+        max_response_time=max_response_time,
+    )
+    candidates = prioritize_candidates(candidates, source_quality)
     requested_audit = candidate_file_audit(
         path,
         candidates,
@@ -275,20 +560,30 @@ def resolve_candidate_input(
         min_clean=min_clean,
         max_age_hours=max_age_hours,
         allow_stale=allow_stale,
+        filter_meta=filter_meta,
     )
     audit.append(requested_audit)
     if requested_audit["accepted"]:
         return path, candidates, None, audit
 
     fallback_files = sorted(
-        [*RUNTIME_RESIN_DIR.glob("clean_candidates_classified*.json"), *RESIN_DIR.glob("clean_candidates_classified*.json")],
+        [
+            *RUNTIME_RESIN_DIR.glob(f"{'relaxed' if pool_mode == 'relaxed' else 'clean'}_candidates_classified*.json"),
+            *RESIN_DIR.glob(f"{'relaxed' if pool_mode == 'relaxed' else 'clean'}_candidates_classified*.json"),
+        ],
         key=lambda item: item.stat().st_mtime,
         reverse=True,
     )
     for fallback in fallback_files:
         if fallback == path:
             continue
-        fallback_candidates = prioritize_candidates(clean_turn_candidates(fallback), source_quality)
+        fallback_raw_candidates = turn_candidates(fallback, pool_mode)
+        fallback_candidates, fallback_filter_meta = filter_candidates(
+            fallback_raw_candidates,
+            exclude_countries=exclude_countries,
+            max_response_time=max_response_time,
+        )
+        fallback_candidates = prioritize_candidates(fallback_candidates, source_quality)
         item_audit = candidate_file_audit(
             fallback,
             fallback_candidates,
@@ -296,6 +591,7 @@ def resolve_candidate_input(
             min_clean=min_clean,
             max_age_hours=max_age_hours,
             allow_stale=allow_stale,
+            filter_meta=fallback_filter_meta,
         )
         audit.append(item_audit)
         if item_audit["accepted"]:
@@ -415,6 +711,9 @@ def normalize_row(item: dict, port: int, worker_host: str, uuid: str, source: st
     row["source"] = source
     row["selection_source"] = source
     row["upstream_source"] = item.get("source")
+    row["registration_tier"] = candidate_tier(row)
+    row["registration_eligible"] = row["registration_tier"] in {"clean", "risky"}
+    row["relaxed_pool"] = row.get("registration_tier") == "risky" or bool(item.get("relaxed_pool"))
     row["pool_class"] = classify(row)
     row["pool_priority"] = pool_priority(row)
     row["tag"] = row.get("tag") or make_tag(row)
@@ -566,7 +865,7 @@ def write_runtime(rows: list[dict], worker_host: str, uuid: str, write_docs: boo
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
+    parser.add_argument("--input", type=Path, default=None)
     parser.add_argument("--baseline", type=Path, default=RUNTIME / "turn_xray_pool_20260608.json")
     parser.add_argument("--verify", type=Path, default=DEFAULT_VERIFY)
     parser.add_argument("--registrar-feedback", type=Path, default=DEFAULT_REGISTRAR_FEEDBACK)
@@ -576,6 +875,65 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=int(os.environ.get("IP_PROXY_POOL_SIZE", "25")))
     parser.add_argument("--min-clean", type=int, default=int(os.environ.get("IP_PROXY_MIN_CLEAN", "12")))
     parser.add_argument("--min-new-candidates", type=int, default=int(os.environ.get("IP_PROXY_MIN_NEW_CANDIDATES", "8")))
+    parser.add_argument(
+        "--exclude-country",
+        default=os.environ.get("IP_PROXY_EXCLUDE_COUNTRY", ""),
+        help="comma-separated country codes to exclude from candidate selection, for example CN,RU",
+    )
+    parser.add_argument(
+        "--max-response-time",
+        type=float,
+        default=float(os.environ.get("IP_PROXY_MAX_RESPONSE_TIME", "0") or "0"),
+        help="drop candidates slower than this checker responseTime in ms; 0 disables the filter",
+    )
+    parser.add_argument(
+        "--pool-mode",
+        choices=sorted(ALLOWED_POOL_MODES),
+        default=os.environ.get("IP_PROXY_POOL_MODE", "strict"),
+        help="strict uses clean TURN candidates only; relaxed also admits risky non-hard-dirty TURN candidates for testing.",
+    )
+    parser.add_argument(
+        "--max-risky-candidates",
+        type=int,
+        default=DEFAULT_MAX_RISKY_CANDIDATES,
+        help="maximum risky candidates allowed in the selected pool; -1 disables this gate",
+    )
+    parser.add_argument(
+        "--max-risky-ratio",
+        type=float,
+        default=DEFAULT_MAX_RISKY_RATIO,
+        help="maximum risky/total ratio allowed in the selected pool; 0 disables this gate",
+    )
+    parser.add_argument(
+        "--min-strict-clean-selected",
+        type=int,
+        default=DEFAULT_MIN_STRICT_CLEAN_SELECTED,
+        help="minimum strict-clean rows required in the selected pool; 0 disables this gate",
+    )
+    parser.add_argument(
+        "--min-countries",
+        type=int,
+        default=DEFAULT_MIN_COUNTRIES,
+        help="minimum number of countries required in the selected pool; 0 disables this gate",
+    )
+    parser.add_argument(
+        "--max-country-ratio",
+        type=float,
+        default=DEFAULT_MAX_COUNTRY_RATIO,
+        help="maximum share of the selected pool allowed for one country; 0 disables this gate",
+    )
+    parser.add_argument(
+        "--max-company-ratio",
+        type=float,
+        default=DEFAULT_MAX_COMPANY_RATIO,
+        help="maximum share of the selected pool allowed for one company; 0 disables this gate",
+    )
+    parser.add_argument(
+        "--max-asn-ratio",
+        type=float,
+        default=DEFAULT_MAX_ASN_RATIO,
+        help="maximum share of the selected pool allowed for one ASN; 0 disables this gate",
+    )
     parser.add_argument(
         "--max-fallback-candidate-age-hours",
         type=float,
@@ -596,7 +954,15 @@ def main() -> int:
         default=os.environ.get("IP_PROXY_ALLOW_RETAIN_BAD_EXITS", "0").strip().lower() in ("1", "true", "yes", "on"),
         help="allow runtime apply even if the selected pool still contains known bad exits",
     )
+    parser.add_argument(
+        "--allow-selection-quality-failures",
+        action="store_true",
+        default=os.environ.get("IP_PROXY_ALLOW_SELECTION_QUALITY_FAILURES", "0").strip().lower() in ("1", "true", "yes", "on"),
+        help="allow runtime apply even if the selected pool violates risky/diversity gates",
+    )
     args = parser.parse_args()
+    if args.input is None:
+        args.input = default_input_for_pool_mode(args.pool_mode)
 
     baseline_path = args.baseline if args.baseline.exists() else DEFAULT_BASELINE
     baseline = read_json(baseline_path, [])
@@ -609,6 +975,9 @@ def main() -> int:
         source_quality,
         args.max_fallback_candidate_age_hours,
         args.allow_stale_fallback_candidates,
+        args.pool_mode,
+        split_csv_values(args.exclude_country),
+        args.max_response_time,
     )
     if len(candidates) < args.min_clean:
         print(
@@ -621,6 +990,9 @@ def main() -> int:
                     "min_clean": args.min_clean,
                     "fallback_reason": fallback_reason,
                     "candidate_input_audit": candidate_input_audit,
+                    "pool_mode": args.pool_mode,
+                    "exclude_country": args.exclude_country,
+                    "max_response_time": args.max_response_time,
                     "max_fallback_candidate_age_hours": args.max_fallback_candidate_age_hours,
                     "allow_stale_fallback_candidates": args.allow_stale_fallback_candidates,
                 },
@@ -647,6 +1019,44 @@ def main() -> int:
     )
     if len(rows) < args.limit:
         raise SystemExit(f"only selected {len(rows)} rows, need {args.limit}")
+    selection_quality = selection_quality_report(rows)
+    selection_quality_gate = selection_quality_gate_config(args)
+    selection_quality_failures = selection_quality_violations(selection_quality, selection_quality_gate)
+    if selection_quality_failures and not args.allow_selection_quality_failures:
+        result = {
+            "status": "blocked",
+            "reason": "selection_quality_gate_failed",
+            "changed": False,
+            "baseline": str(baseline_path),
+            "input": str(input_path),
+            "requested_input": str(args.input),
+            "verify": str(args.verify),
+            "registrar_feedback": str(args.registrar_feedback),
+            "source_quality": source_quality_meta,
+            "candidate_input_audit": candidate_input_audit,
+            "pool_mode": args.pool_mode,
+            "exclude_country": args.exclude_country,
+            "max_response_time": args.max_response_time,
+            "verify_bad_exit_ips": sorted(verify_failed),
+            "verify_bad_exit_details": verify_failed_details,
+            "registrar_bad_exit_ips": sorted(registrar_failed),
+            "fallback_reason": fallback_reason,
+            "min_new_candidates": args.min_new_candidates,
+            "max_fallback_candidate_age_hours": args.max_fallback_candidate_age_hours,
+            "allow_stale_fallback_candidates": args.allow_stale_fallback_candidates,
+            "selection_quality": selection_quality,
+            "selection_quality_gate": selection_quality_gate,
+            "selection_quality_failures": selection_quality_failures,
+            "dry_run": args.dry_run,
+            **meta,
+        }
+        (ROOT / "captures").mkdir(parents=True, exist_ok=True)
+        (ROOT / "captures/ip_pool_refresh_latest.json").write_text(
+            json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if args.dry_run else 2
     if meta.get("retained_bad_exit_ips") and not args.dry_run and not args.allow_retain_bad_exits:
         result = {
             "status": "blocked",
@@ -659,6 +1069,9 @@ def main() -> int:
             "registrar_feedback": str(args.registrar_feedback),
             "source_quality": source_quality_meta,
             "candidate_input_audit": candidate_input_audit,
+            "pool_mode": args.pool_mode,
+            "exclude_country": args.exclude_country,
+            "max_response_time": args.max_response_time,
             "verify_bad_exit_ips": sorted(verify_failed),
             "verify_bad_exit_details": verify_failed_details,
             "registrar_bad_exit_ips": sorted(registrar_failed),
@@ -666,6 +1079,9 @@ def main() -> int:
             "min_new_candidates": args.min_new_candidates,
             "max_fallback_candidate_age_hours": args.max_fallback_candidate_age_hours,
             "allow_stale_fallback_candidates": args.allow_stale_fallback_candidates,
+            "selection_quality": selection_quality,
+            "selection_quality_gate": selection_quality_gate,
+            "selection_quality_failures": selection_quality_failures,
             "dry_run": args.dry_run,
             **meta,
         }
@@ -687,6 +1103,11 @@ def main() -> int:
         "registrar_feedback": str(args.registrar_feedback),
         "source_quality": source_quality_meta,
         "candidate_input_audit": candidate_input_audit,
+        "pool_mode": args.pool_mode,
+        "exclude_country": args.exclude_country,
+        "max_response_time": args.max_response_time,
+        "risky_selected": sum(1 for row in rows if row.get("registration_tier") == "risky"),
+        "clean_selected": sum(1 for row in rows if row.get("registration_tier") == "clean"),
         "verify_bad_exit_ips": sorted(verify_failed),
         "verify_bad_exit_details": verify_failed_details,
         "registrar_bad_exit_ips": sorted(registrar_failed),
@@ -694,6 +1115,9 @@ def main() -> int:
         "min_new_candidates": args.min_new_candidates,
         "max_fallback_candidate_age_hours": args.max_fallback_candidate_age_hours,
         "allow_stale_fallback_candidates": args.allow_stale_fallback_candidates,
+        "selection_quality": selection_quality,
+        "selection_quality_gate": selection_quality_gate,
+        "selection_quality_failures": selection_quality_failures,
         **meta,
         **written,
     }

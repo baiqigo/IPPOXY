@@ -379,12 +379,15 @@ def select_check_candidates(
     include_cooldown_sources: bool = False,
     max_per_kind: int = 0,
     relax_source_cap: bool = False,
+    only_kinds: set[str] | None = None,
 ) -> list[dict]:
     active = [
         item
         for item in candidates
         if include_cooldown_sources or not is_cooldown_source(item, source_quality)
     ]
+    if only_kinds:
+        active = [item for item in active if candidate_kind(item) in only_kinds]
     limit = len(active) if max_check <= 0 else min(max_check, len(active))
     if limit <= 0:
         return []
@@ -436,6 +439,7 @@ def selection_summary(
     max_per_source: int = 0,
     max_per_kind: int = 0,
     relax_source_cap: bool = False,
+    only_kinds: set[str] | None = None,
 ) -> dict:
     selected_ids = {id(item) for item in selected}
     cooldown_candidates = [item for item in candidates if is_cooldown_source(item, source_quality)]
@@ -461,6 +465,7 @@ def selection_summary(
         "max_check_per_source": max_per_source,
         "max_check_per_kind": max_per_kind,
         "relax_source_cap": relax_source_cap,
+        "only_kinds": sorted(only_kinds or []),
         "include_cooldown_sources": include_cooldown_sources,
         "skipped_cooldown_candidates": 0
         if include_cooldown_sources
@@ -484,6 +489,7 @@ def write_selection_summary(
     max_per_source: int = 0,
     max_per_kind: int = 0,
     relax_source_cap: bool = False,
+    only_kinds: set[str] | None = None,
 ) -> dict:
     summary = selection_summary(
         candidates,
@@ -494,6 +500,7 @@ def write_selection_summary(
         max_per_source=max_per_source,
         max_per_kind=max_per_kind,
         relax_source_cap=relax_source_cap,
+        only_kinds=only_kinds,
     )
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     write_json(RUNTIME_DIR / f"proxy_candidate_selection_{run_id}.json", summary)
@@ -643,12 +650,20 @@ def main() -> int:
         action="store_true",
         help="allow the second fill pass to exceed --max-check-per-source when non-cooldown supply is sparse",
     )
+    parser.add_argument(
+        "--only-kind",
+        action="append",
+        choices=["turn", "sstp", "socks5"],
+        default=[],
+        help="limit checked candidates to the given kind; repeat to allow multiple kinds",
+    )
     parser.add_argument("--run-id", default="", help="stable run id for timestamped outputs")
     parser.add_argument("--source-quality", type=Path, default=DEFAULT_SOURCE_QUALITY)
     args = parser.parse_args()
     run_id = args.run_id or time.strftime("%Y%m%d_%H%M%S")
 
     load_candidates.max_socks_per_source = args.max_socks_per_source
+    only_kinds = set(args.only_kind or [])
     candidates = load_candidates()
     source_quality = load_source_quality(args.source_quality)
     candidates = prioritize_candidates(candidates, source_quality)
@@ -666,6 +681,7 @@ def main() -> int:
             max_per_source=args.max_check_per_source,
             max_per_kind=args.max_check_per_kind,
             relax_source_cap=args.relax_source_cap,
+            only_kinds=only_kinds,
         )
         print(
             json.dumps(
@@ -689,6 +705,7 @@ def main() -> int:
         args.include_cooldown_sources,
         args.max_check_per_kind,
         args.relax_source_cap,
+        only_kinds,
     )
     selection = write_selection_summary(
         pool_candidates,
@@ -700,6 +717,7 @@ def main() -> int:
         max_per_source=args.max_check_per_source,
         max_per_kind=args.max_check_per_kind,
         relax_source_cap=args.relax_source_cap,
+        only_kinds=only_kinds,
     )
     results: list[dict] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:

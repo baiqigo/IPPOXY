@@ -26,6 +26,11 @@ RESULT_FILES = {
 }
 IP_RUNTIME = ROOT / ".runtime/ip-proxy"
 DEFAULT_OUTLOOK_PROXY = "http://IPPOXY_RES.outlook-register:daytona@127.0.0.1:2260"
+PROXY_PLATFORM_PREFIXES = {
+    "res": "IPPOXY_RES",
+    "static": "IPPOXY_STATIC",
+    "all": "IPPOXY_ALL",
+}
 SOURCE_QUALITY_JSON = IP_RUNTIME / "research/proxy_source_quality_latest.json"
 SOURCE_QUALITY_MD = IP_RUNTIME / "research/proxy_source_quality_latest.md"
 PROXY_CANDIDATE_CHECK = IP_RUNTIME / "research/proxy_candidate_check.latest.json"
@@ -71,6 +76,15 @@ def load_env_defaults(path: Path = ROOT / ".env") -> dict:
         os.environ[key] = value
         loaded.append(key)
     return {"path": str(path), "loaded": bool(loaded), "keys": loaded}
+
+
+def default_proxy_for_platform(platform: str) -> str:
+    prefix = PROXY_PLATFORM_PREFIXES[platform]
+    return f"http://{prefix}.outlook-register:daytona@127.0.0.1:2260"
+
+
+def pool_mode_for_platform(platform: str) -> str:
+    return "relaxed" if platform == "all" else "strict"
 
 
 def summarize_mailhub_stats(result: object) -> dict:
@@ -300,6 +314,18 @@ def main() -> int:
         help="Run the registration batch directly with Python or via docker compose.",
     )
     parser.add_argument("--build", action="store_true", help="Run docker compose build outlook-register before a docker batch.")
+    parser.add_argument(
+        "--proxy-platform",
+        choices=sorted(PROXY_PLATFORM_PREFIXES),
+        default=os.environ.get("OUTLOOK_PROXY_PLATFORM", "res"),
+        help="Default Resin platform when OUTLOOK_PROXY is not set. Use all for relaxed pool tests.",
+    )
+    parser.add_argument(
+        "--force-proxy-platform",
+        action="store_true",
+        default=os.environ.get("OUTLOOK_FORCE_PROXY_PLATFORM", "0").strip().lower() in ("1", "true", "yes", "on"),
+        help="Use --proxy-platform even when OUTLOOK_PROXY is already set in the environment.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Only print planned commands and write a dry-run report.")
     parser.add_argument("--skip-release-check", action="store_true")
     args = parser.parse_args()
@@ -313,13 +339,16 @@ def main() -> int:
     registrar_feedback_latest_path = captures / "ip_registrar_feedback_latest.json"
     pool_refresh_latest_path = captures / "ip_pool_refresh_latest.json"
     env = os.environ.copy()
+    inherited_outlook_proxy = env.get("OUTLOOK_PROXY")
+    selected_outlook_proxy = default_proxy_for_platform(args.proxy_platform) if args.force_proxy_platform else env.get("OUTLOOK_PROXY", default_proxy_for_platform(args.proxy_platform))
     env.update(
         {
             "OUTLOOK_MAX_TASKS": str(args.tasks),
             "OUTLOOK_CONCURRENT_FLOWS": str(args.concurrent),
             "OUTLOOK_IP_FAILURE_RETRIES": str(args.ip_failure_retries),
             "OUTLOOK_PROXY_PRECHECK": env.get("OUTLOOK_PROXY_PRECHECK", "1"),
-            "OUTLOOK_PROXY": env.get("OUTLOOK_PROXY", DEFAULT_OUTLOOK_PROXY),
+            "OUTLOOK_PROXY": selected_outlook_proxy,
+            "OUTLOOK_PROXY_PLATFORM": args.proxy_platform,
             "OUTLOOK_PROXY_STICKY_MODE": env.get("OUTLOOK_PROXY_STICKY_MODE", "flow"),
             "OUTLOOK_FLOW_STATS_DIR": env.get("OUTLOOK_FLOW_STATS_DIR", str(flow_stats_dir)),
         }
@@ -357,6 +386,8 @@ def main() -> int:
         sys.executable,
         "tools/ip_proxy_pool_refresh.py",
         "--dry-run",
+        "--pool-mode",
+        pool_mode_for_platform(args.proxy_platform),
         "--registrar-feedback",
         str(registrar_feedback_path),
     ]
@@ -368,6 +399,10 @@ def main() -> int:
             "dry_run": True,
             "runner": args.runner,
             "build_skipped": build_skipped,
+            "proxy_platform": args.proxy_platform,
+            "force_proxy_platform": args.force_proxy_platform,
+            "inherited_outlook_proxy_set": bool(inherited_outlook_proxy),
+            "pool_mode": pool_mode_for_platform(args.proxy_platform),
             "report_path": str(report_path),
             "log_path": str(log_path),
             "env": {k: env[k] for k in sorted(env) if k.startswith("OUTLOOK_")},
@@ -414,6 +449,8 @@ def main() -> int:
         "run_id": args.run_id,
         "runner": args.runner,
         "build_skipped": build_skipped,
+        "proxy_platform": args.proxy_platform,
+        "pool_mode": pool_mode_for_platform(args.proxy_platform),
         "tasks": args.tasks,
         "concurrent": args.concurrent,
         "ip_failure_retries": args.ip_failure_retries,

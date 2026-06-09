@@ -195,6 +195,18 @@ def main() -> int:
     parser.add_argument("--batch-run-id", default="")
     parser.add_argument("--batch-build", action="store_true", help="Build outlook-register before the post-refresh batch.")
     parser.add_argument("--batch-skip-release-check", action="store_true")
+    parser.add_argument(
+        "--batch-proxy-platform",
+        choices=["res", "static", "all"],
+        default=os.environ.get("OUTLOOK_BATCH_VERIFY_PROXY_PLATFORM", "res"),
+        help="Proxy platform forwarded to ippoxy_sandbox_batch_verify.py.",
+    )
+    parser.add_argument(
+        "--batch-force-proxy-platform",
+        action="store_true",
+        default=os.environ.get("OUTLOOK_BATCH_VERIFY_FORCE_PROXY_PLATFORM", "0").strip().lower() in ("1", "true", "yes", "on"),
+        help="Force the batch verifier to use --batch-proxy-platform even if OUTLOOK_PROXY is inherited.",
+    )
     parser.add_argument("--pool-refresh-arg", action="append", default=[], help="Extra arg forwarded to ip_proxy_pool_refresh.py.")
     parser.add_argument(
         "--resin-force-replace",
@@ -218,9 +230,13 @@ def main() -> int:
         str(args.batch_ip_failure_retries),
         "--runner",
         args.batch_runner,
+        "--proxy-platform",
+        args.batch_proxy_platform,
         "--run-id",
         batch_run_id,
     ]
+    if args.batch_force_proxy_platform:
+        batch_cmd.append("--force-proxy-platform")
     if args.batch_build:
         batch_cmd.append("--build")
     if args.batch_skip_release_check:
