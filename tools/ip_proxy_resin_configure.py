@@ -14,6 +14,8 @@ ROOT = Path(os.environ.get("IPPOXY_ROOT", "/home/daytona/IPPOXY"))
 BASE = os.environ.get("RESIN_BASE_URL", "http://127.0.0.1:2260/api/v1").rstrip("/")
 ADMIN_TOKEN = os.environ.get("RESIN_ADMIN_TOKEN", "daytona-admin")
 RUNTIME = Path(os.environ.get("IP_PROXY_RUNTIME_DIR", ROOT / ".runtime/ip-proxy"))
+DEFAULT_EPHEMERAL_NODE_EVICT_DELAY = "30m"
+ZERO_DURATION_VALUES = {"0", "0s", "0m", "0h", "0ms", "0us", "0ns"}
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -21,6 +23,18 @@ def env_bool(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def resolve_ephemeral_node_evict_delay() -> str:
+    value = os.environ.get("RESIN_EPHEMERAL_NODE_EVICT_DELAY", DEFAULT_EPHEMERAL_NODE_EVICT_DELAY).strip()
+    if not value:
+        value = DEFAULT_EPHEMERAL_NODE_EVICT_DELAY
+    if value.lower() in ZERO_DURATION_VALUES and not env_bool("RESIN_ALLOW_ZERO_EVICT_DELAY", False):
+        raise RuntimeError(
+            "RESIN_EPHEMERAL_NODE_EVICT_DELAY=0 is unsafe for the local Xray runtime pool; "
+            "use a positive delay such as 30m, or set RESIN_ALLOW_ZERO_EVICT_DELAY=1 to override."
+        )
+    return value
 
 
 def request(method: str, path: str, body: dict | None = None, retry_without: tuple[str, ...] = ()) -> object:
@@ -67,7 +81,7 @@ def upsert_subscription(*, force_replace: bool = False) -> str:
         content_file = ROOT / "docs/ip-proxy/resin/turn_xray_pool_25.local.txt"
     content = content_file.read_text(encoding="utf-8")
     incremental_alive_nodes = not force_replace and env_bool("RESIN_INCREMENTAL_ALIVE_NODES", True)
-    evict_delay = os.environ.get("RESIN_EPHEMERAL_NODE_EVICT_DELAY", "0s" if force_replace else "30m")
+    evict_delay = resolve_ephemeral_node_evict_delay()
     body = {
         "name": "ippoxy-turn-xray-local",
         "source_type": "local",
@@ -82,8 +96,13 @@ def upsert_subscription(*, force_replace: bool = False) -> str:
     retry_without = ("incremental_alive_nodes",)
     if existing:
         sub_id = existing["id"]
-        patch_body = {k: v for k, v in body.items() if k != "source_type"}
-        request("PATCH", f"/subscriptions/{sub_id}", patch_body, retry_without=retry_without)
+        if force_replace:
+            request("DELETE", f"/subscriptions/{sub_id}")
+            created = request("POST", "/subscriptions", body, retry_without=retry_without)
+            sub_id = created["id"] if isinstance(created, dict) else find_by_name("/subscriptions?limit=200", body["name"])["id"]
+        else:
+            patch_body = {k: v for k, v in body.items() if k != "source_type"}
+            request("PATCH", f"/subscriptions/{sub_id}", patch_body, retry_without=retry_without)
     else:
         created = request("POST", "/subscriptions", body, retry_without=retry_without)
         sub_id = created["id"] if isinstance(created, dict) else find_by_name("/subscriptions?limit=200", body["name"])["id"]
