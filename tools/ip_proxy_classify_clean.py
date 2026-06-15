@@ -19,6 +19,20 @@ RISKY_DIRTY_FLAGS = {"is_datacenter", "is_proxy", "is_vpn"}
 HARD_DIRTY_FLAGS = {"is_tor", "is_abuser", "is_bogon"}
 
 
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
 def dirty_flags(item: dict) -> set[str]:
     values = item.get("dirty") or []
     if not isinstance(values, list):
@@ -50,7 +64,65 @@ def bucket(item: dict) -> str:
 
 
 def write_json(path: Path, data: object) -> None:
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+
+def turn_candidate_count(rows: list[dict], tiers: set[str] | None = None) -> int:
+    total = 0
+    for item in rows:
+        if item.get("kind") != "turn":
+            continue
+        if not item.get("raw") or not item.get("exit_ip"):
+            continue
+        if tiers is not None and str(item.get("registration_tier") or "").lower() not in tiers:
+            continue
+        total += 1
+    return total
+
+
+def latest_update_guard(
+    *,
+    clean: list[dict],
+    relaxed: list[dict],
+    candidate_rows: list[dict],
+    min_clean_turn: int,
+    min_relaxed_turn: int,
+    min_all_turn: int,
+    force: bool,
+) -> dict:
+    counts = {
+        "clean_turn": turn_candidate_count(clean, {"clean"}),
+        "relaxed_turn": turn_candidate_count(relaxed, {"clean", "risky"}),
+        "all_turn": turn_candidate_count(candidate_rows),
+    }
+    thresholds = {
+        "min_clean_turn": max(0, int(min_clean_turn)),
+        "min_relaxed_turn": max(0, int(min_relaxed_turn)),
+        "min_all_turn": max(0, int(min_all_turn)),
+    }
+    failures = []
+    for count_key, threshold_key in (
+        ("clean_turn", "min_clean_turn"),
+        ("relaxed_turn", "min_relaxed_turn"),
+        ("all_turn", "min_all_turn"),
+    ):
+        if counts[count_key] < thresholds[threshold_key]:
+            failures.append(
+                {
+                    "reason": "latest_quality_gate_failed",
+                    "count_key": count_key,
+                    "actual": counts[count_key],
+                    "threshold_key": threshold_key,
+                    "expected": thresholds[threshold_key],
+                }
+            )
+    return {
+        "allowed": bool(force or not failures),
+        "forced": bool(force),
+        "counts": counts,
+        "thresholds": thresholds,
+        "failures": failures,
+    }
 
 
 def display_date(run_id: str) -> str:
@@ -62,6 +134,30 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, default=CHECK_JSON)
     parser.add_argument("--run-id", default="")
+    parser.add_argument(
+        "--force-latest",
+        action="store_true",
+        default=env_bool("IP_PROXY_CLASSIFY_FORCE_LATEST", False),
+        help="update .latest outputs even when the latest quality gate would block them",
+    )
+    parser.add_argument(
+        "--min-latest-clean-turn",
+        type=int,
+        default=int(os.environ.get("IP_PROXY_CLASSIFY_MIN_LATEST_CLEAN_TURN", "1")),
+        help="minimum clean TURN rows required before .latest classification files are replaced",
+    )
+    parser.add_argument(
+        "--min-latest-relaxed-turn",
+        type=int,
+        default=int(os.environ.get("IP_PROXY_CLASSIFY_MIN_LATEST_RELAXED_TURN", "1")),
+        help="minimum clean+risky TURN rows required before .latest classification files are replaced",
+    )
+    parser.add_argument(
+        "--min-latest-all-turn",
+        type=int,
+        default=int(os.environ.get("IP_PROXY_CLASSIFY_MIN_LATEST_ALL_TURN", "1")),
+        help="minimum checked TURN rows required before .latest classification files are replaced",
+    )
     args = parser.parse_args()
     run_id = args.run_id or time.strftime("%Y%m%d_%H%M%S")
 
@@ -84,38 +180,40 @@ def main() -> int:
     relaxed_kind_counts = Counter((item["registration_tier"], item.get("kind")) for item in relaxed)
     type_counts = Counter((item.get("company_type"), item.get("asn_type")) for item in clean)
     dirty_reason_counts = Counter(flag for item in candidate_rows for flag in dirty_flags(item))
+    latest_guard = latest_update_guard(
+        clean=clean,
+        relaxed=relaxed,
+        candidate_rows=candidate_rows,
+        min_clean_turn=args.min_latest_clean_turn,
+        min_relaxed_turn=args.min_latest_relaxed_turn,
+        min_all_turn=args.min_latest_all_turn,
+        force=args.force_latest,
+    )
+    update_latest = bool(latest_guard["allowed"])
 
     RESIN_DIR.mkdir(parents=True, exist_ok=True)
     write_json(RESIN_DIR / f"clean_candidates_classified_{run_id}.json", clean)
-    write_json(RESIN_DIR / "clean_candidates_classified.latest.json", clean)
     write_json(RESIN_DIR / f"relaxed_candidates_classified_{run_id}.json", relaxed)
-    write_json(RESIN_DIR / "relaxed_candidates_classified.latest.json", relaxed)
     write_json(RESIN_DIR / f"dirty_candidates_classified_{run_id}.json", dirty)
-    write_json(RESIN_DIR / "dirty_candidates_classified.latest.json", dirty)
     write_json(RESIN_DIR / f"all_candidates_classified_{run_id}.json", candidate_rows)
-    write_json(RESIN_DIR / "all_candidates_classified.latest.json", candidate_rows)
+    if update_latest:
+        write_json(RESIN_DIR / "clean_candidates_classified.latest.json", clean)
+        write_json(RESIN_DIR / "relaxed_candidates_classified.latest.json", relaxed)
+        write_json(RESIN_DIR / "dirty_candidates_classified.latest.json", dirty)
+        write_json(RESIN_DIR / "all_candidates_classified.latest.json", candidate_rows)
 
     for name in ["residential", "static", "risk_review"]:
         bucket_rows = [item["raw"] for item in clean if item["pool_bucket"] == name]
         text = ("\n".join(bucket_rows) + "\n") if bucket_rows else ""
-        (RESIN_DIR / f"{name}_clean_candidates_{run_id}.txt").write_text(
-            text,
-            encoding="utf-8",
-        )
-        (RESIN_DIR / f"{name}_clean_candidates.latest.txt").write_text(
-            ("\n".join(bucket_rows) + "\n") if bucket_rows else "",
-            encoding="utf-8",
-        )
+        atomic_write_text(RESIN_DIR / f"{name}_clean_candidates_{run_id}.txt", text)
+        if update_latest:
+            atomic_write_text(RESIN_DIR / f"{name}_clean_candidates.latest.txt", text)
     for name in ["clean", "risky"]:
         tier_rows = [item["raw"] for item in relaxed if item["registration_tier"] == name]
-        (RESIN_DIR / f"{name}_relaxed_candidates_{run_id}.txt").write_text(
-            ("\n".join(tier_rows) + "\n") if tier_rows else "",
-            encoding="utf-8",
-        )
-        (RESIN_DIR / f"{name}_relaxed_candidates.latest.txt").write_text(
-            ("\n".join(tier_rows) + "\n") if tier_rows else "",
-            encoding="utf-8",
-        )
+        text = ("\n".join(tier_rows) + "\n") if tier_rows else ""
+        atomic_write_text(RESIN_DIR / f"{name}_relaxed_candidates_{run_id}.txt", text)
+        if update_latest:
+            atomic_write_text(RESIN_DIR / f"{name}_relaxed_candidates.latest.txt", text)
 
     lines = [
         f"# Candidate Classification {display_date(run_id)}",
@@ -231,8 +329,16 @@ def main() -> int:
         )
 
     md = "\n".join(lines) + "\n"
-    (RESIN_DIR / f"clean_candidate_classification_{run_id}.md").write_text(md, encoding="utf-8")
-    (RESIN_DIR / "clean_candidate_classification.latest.md").write_text(md, encoding="utf-8")
+    atomic_write_text(RESIN_DIR / f"clean_candidate_classification_{run_id}.md", md)
+    if update_latest:
+        atomic_write_text(RESIN_DIR / "clean_candidate_classification.latest.md", md)
+    guard_report = {
+        "run_id": run_id,
+        "latest_updated": update_latest,
+        "latest_guard": latest_guard,
+    }
+    write_json(RESIN_DIR / f"candidate_classification_guard_{run_id}.json", guard_report)
+    write_json(RESIN_DIR / "candidate_classification_guard.latest.json", guard_report)
     print(
         json.dumps(
             {
@@ -243,6 +349,8 @@ def main() -> int:
                 "risky": relaxed_counts["risky"],
                 "dirty": len(dirty),
                 "pool_buckets": dict(counts),
+                "latest_updated": update_latest,
+                "latest_guard": latest_guard,
             },
             ensure_ascii=False,
         )
