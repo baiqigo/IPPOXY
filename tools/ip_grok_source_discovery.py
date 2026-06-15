@@ -37,25 +37,33 @@ PROMPT = """你是 IPPOXY 的公开资料检索助手。当前目标是寻找可
 - 运行环境是 setbox/Daytona Linux sandbox。
 - Resin 负责代理池、健康检查、坏节点剔除、粘性租约、轮换。
 - 现有来源包括：
-  1. https://sub.cmliussss.net/vpngate
-  2. https://www.vpngate.net/api/iphone/
-  3. https://raw.githubusercontent.com/Delta-Kronecker/Vpn-Gate/refs/heads/main/sstp_hosts.txt
-  4. 用户已有 TURN 链式候选，格式 turn://host:port 或 turn://user:pass@host:port
-  5. https://check.socks5.cmliussss.net/ 用于检测候选，不是来源池。
+  - https://sub.cmliussss.net/vpngate
+  - https://www.vpngate.net/api/iphone/
+  - https://raw.githubusercontent.com/Delta-Kronecker/Vpn-Gate/refs/heads/main/sstp_hosts.txt
+  - TURN 链式候选，格式 turn://host:port 或 turn://user:pass@host:port
+  - https://raw.githubusercontent.com/ToiCF/CF-Workers-TURN/main/turn_results.txt
+  - https://raw.githubusercontent.com/cmliu/Socks2Vlesssub/main/socks5api.txt
+  - https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt
+  - https://api.proxyscrape.com/v4/free-proxy-list/get?protocol=socks5&format=txt
+  - https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt
+  - https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt
+  - https://check.socks5.cmliussss.net/ 检测用，不是来源池
 
-请联网搜索新的“明确可抓取公开来源”，重点方向：
-1. VPNGate/OpenGW/SSTP 的公开订阅、raw 列表、GitHub 自动采集仓库。
-2. cmliussss / edgetunnel / CF-Workers-TURN / CF-Workers-CheckSocks5 生态里可能暴露 TURN/SSTP/SOCKS5 候选的页面或仓库。
-3. 免费 SOCKS5/HTTP 订阅或 raw 列表，必须是明确 URL，且适合导入 Resin 前再检测分类。
-4. 自动维护相关工具或仓库：能周期拉取公开列表、验证可用性、输出 SOCKS5/HTTP/VLESS/SSTP/TURN 列表。
-5. 如果有“链式TURN代理”“turn://”“OpenGW SSTP”“sstp://vpn:vpn@”相关公开列表，请优先列出。
+请联网搜索新的"明确可抓取公开来源"，重点方向：
+- VPNGate/OpenGW/SSTP 的公开订阅、raw 列表、GitHub 自动采集仓库
+- cmliussss / edgetunnel / CF-Workers-TURN 生态里暴露 TURN/SSTP/SOCKS5 候选的页面或仓库
+- 免费 SOCKS5/HTTP 订阅或 raw 列表（明确 URL，适合自动拉取）
+- V2Ray/VMess/VLESS/Trojan/Clash 订阅聚合站（如 v2rayfree, freefq, airport-free 等 GitHub raw 文件）
+- 非GitHub来源：Pastebin、rentry.co、justpaste.it、Telegraph、Telegram频道镜像、博客文章中明确给出的订阅URL
+- 自动维护相关工具或仓库：能周期拉取公开列表、验证可用性、输出候选列表
+- "链式TURN代理""turn://""OpenGW SSTP""sstp://vpn:vpn@"相关公开列表优先
 
 硬性要求：
 - 不要建议 FOFA/Shodan/Censys 或任何全网探测；本阶段只接受公开列表、订阅、GitHub raw、官方 API、教程中明确给出的候选源。
 - 每条必须给 URL。
-- 每条标注：source_type（sstp_subscription / official_api / github_raw / turn_list / socks_subscription / tool_only / tutorial_only）、是否可直接抓取、预计候选量、是否可能住宅/ISP、风险。
+- 每条标注：source_type、是否可直接抓取、预计候选量、是否可能住宅/ISP、风险。
 - 标出和现有来源重复的项，不要当新来源。
-- 最后给出“建议马上接入 harvester 的前 10 个公开 URL”。
+- 最后给出"建议马上接入 harvester 的前 10 个公开 URL"。
 - 输出 Markdown。
 """
 
@@ -93,6 +101,9 @@ def extract_urls(markdown: str) -> list[str]:
     seen: set[str] = set()
     for url in urls:
         url = url.rstrip(".,;，。；")
+        # Strip Grok markdown artifacts: trailing **, *, quotes
+        url = url.rstrip("*\"'")
+        url = re.sub(r'\*+$', '', url)
         if url not in seen:
             seen.add(url)
             clean.append(url)
@@ -221,12 +232,82 @@ _STATIC_SOURCE_URLS: set[str] = {
 }
 
 
-def classify_urls(urls: list[str]) -> list[dict]:
-    """Classify discovered URLs by source_type heuristics."""
+# Common raw file paths to try when expanding a github_repo URL into fetchable raw URLs
+_GITHUB_REPO_EXPANSION_PATHS = [
+    "main/sub.txt",
+    "main/v2ray.txt",
+    "main/clash.yaml",
+    "main/proxy-list.txt",
+    "main/socks5.txt",
+    "main/socks5Data",
+    "main/turn_results.txt",
+    "main/sstp_hosts.txt",
+    "main/result.txt",
+]
+
+_GITHUB_REPO_EXPANSION_BRANCHES = ["main"]
+
+
+def _expand_github_repo(url: str) -> list[dict]:
+    """Expand a github_repo URL into candidate raw.githubusercontent.com URLs."""
+    m = re.match(r"https?://github\.com/([^/]+)/([^/]+)/?$", url.rstrip("/"))
+    if not m:
+        return []
+    owner, repo = m.group(1), m.group(2)
     sources: list[dict] = []
+    seen_urls: set[str] = set()
+    for branch in _GITHUB_REPO_EXPANSION_BRANCHES:
+        for path in _GITHUB_REPO_EXPANSION_PATHS:
+            raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/refs/heads/{branch}/{path}"
+            if raw_url not in seen_urls:
+                seen_urls.add(raw_url)
+                # Determine expected_kind based on path keywords
+                path_lower = path.lower()
+                if "sstp" in path_lower:
+                    expected_kind = "sstp"
+                    source_type = "github_raw"
+                elif "turn" in path_lower:
+                    expected_kind = "turn"
+                    source_type = "github_raw"
+                elif "socks5" in path_lower or "socks" in path_lower or "proxy-list" in path_lower:
+                    expected_kind = "socks5"
+                    source_type = "github_raw"
+                elif any(kw in path_lower for kw in ("v2ray", "vless", "vmess", "clash", "sub", "trojan")):
+                    expected_kind = "subscription"
+                    source_type = "github_raw"
+                else:
+                    expected_kind = "unknown"
+                    source_type = "github_raw"
+                sources.append({
+                    "url": raw_url,
+                    "source_type": source_type,
+                    "expected_kind": expected_kind,
+                    "fetchable": True,
+                    "expanded_from": url,
+                })
+    return sources
+
+
+def classify_urls(urls: list[str]) -> list[dict]:
+    """Classify discovered URLs by source_type heuristics.
+
+    Improvements over original:
+    - Strips Grok markdown artifacts (**, quotes) from URLs
+    - Expands github_repo URLs into candidate raw.githubusercontent.com URLs
+    - Marks gist raw URLs as fetchable
+    - Classifies raw.cmliussss.com as fetchable
+    - Adds subscription as a fetchable source_type
+    """
+    sources: list[dict] = []
+    seen_urls: set[str] = set()
     for url in urls:
-        if url in _STATIC_SOURCE_URLS:
+        # Clean markdown artifacts
+        url = url.rstrip("*\"'")
+        url = re.sub(r'\*+$', '', url)
+        if url in seen_urls or url in _STATIC_SOURCE_URLS:
             continue
+        seen_urls.add(url)
+
         url_lower = url.lower()
         if "vpngate" in url_lower or "opengw" in url_lower or "sstp" in url_lower:
             source_type = "sstp_subscription"
@@ -238,11 +319,28 @@ def classify_urls(urls: list[str]) -> list[dict]:
             source_type = "github_raw"
         elif "api." in url_lower and ("vpngate" in url_lower or "proxy" in url_lower):
             source_type = "official_api"
+        elif "gist.githubusercontent.com" in url_lower:
+            source_type = "gist_raw"
         elif "github.com" in url_lower and "raw" not in url_lower:
             source_type = "github_repo"
         else:
             source_type = "other"
-        if source_type in ("sstp_subscription", "official_api"):
+        if source_type == "gist_raw":
+            # gist raw files are directly fetchable, guess kind from URL keywords
+            if any(kw in url_lower for kw in ("socks5", "socks", "proxy")):
+                expected_kind = "socks5"
+            elif any(kw in url_lower for kw in ("v2ray", "vless", "vmess", "clash", "sub")):
+                expected_kind = "subscription"
+            else:
+                expected_kind = "unknown"
+            sources.append({
+                "url": url,
+                "source_type": source_type,
+                "expected_kind": expected_kind,
+                "fetchable": True,
+            })
+            continue
+        elif source_type in ("sstp_subscription", "official_api"):
             expected_kind = "sstp"
         elif source_type == "turn_list":
             expected_kind = "turn"
@@ -255,11 +353,28 @@ def classify_urls(urls: list[str]) -> list[dict]:
                 expected_kind = "unknown"
         else:
             expected_kind = "unknown"
+        fetchable = source_type in (
+            "sstp_subscription", "official_api", "github_raw",
+            "socks_subscription", "turn_list", "gist_raw",
+        )
+        # Special: raw.cmliussss.com is fetchable
+        if "raw.cmliussss.com" in url_lower:
+            source_type = "github_raw"
+            fetchable = True
+            expected_kind = "subscription"
+        if source_type == "github_repo":
+            # Expand repo into candidate raw URLs instead of marking not fetchable
+            expanded = _expand_github_repo(url)
+            if expanded:
+                sources.extend(expanded)
+                continue
+            # If expansion fails (unlikely URL pattern), keep as not fetchable
+            fetchable = False
         sources.append({
             "url": url,
             "source_type": source_type,
             "expected_kind": expected_kind,
-            "fetchable": source_type in ("sstp_subscription", "official_api", "github_raw", "socks_subscription", "turn_list"),
+            "fetchable": fetchable,
         })
     return sources
 
