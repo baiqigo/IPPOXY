@@ -19,6 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import subprocess
 from collections import Counter
 from pathlib import Path
 
@@ -46,11 +47,33 @@ HEADERS = {
     "Referer": "https://check.socks5.cmliussss.net/",
 }
 
+# Global fetch proxy: set via --fetch-proxy CLI arg or IP_PROXY_FETCH_PROXY env.
+# When set, all HTTP fetches route through this proxy (e.g. socks5h://127.0.0.1:19081).
+FETCH_PROXY: str | None = os.environ.get("IP_PROXY_FETCH_PROXY") or None
+
 
 def fetch_text(url: str, timeout: int = 30) -> str:
+    if FETCH_PROXY:
+        return _fetch_curl(url, timeout)
     req = urllib.request.Request(url, headers=HEADERS)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read().decode("utf-8", errors="ignore")
+
+
+def _fetch_curl(url: str, timeout: int = 30) -> str:
+    """Fetch URL via curl subprocess with SOCKS5/HTTP proxy support."""
+    cmd = [
+        "curl", "-sS", "--max-time", str(timeout),
+        "-x", FETCH_PROXY,
+        "-H", "User-Agent: Mozilla/5.0",
+        "-H", "Accept: application/json,text/plain,*/*",
+        "-H", "Referer: https://check.socks5.cmliussss.net/",
+        url,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 10)
+    if result.returncode != 0:
+        raise OSError(f"curl failed (rc={result.returncode}): {result.stderr.strip()}")
+    return result.stdout
 
 
 def safe_fetch_text(source: str, timeout: int = 30) -> str:
@@ -511,11 +534,10 @@ def write_selection_summary(
 def check_candidate(item: dict, timeout: int) -> dict:
     proxy = item["raw"]
     url = "https://check.socks5.cmliussss.net/check?proxy=" + urllib.parse.quote(proxy, safe="")
-    req = urllib.request.Request(url, headers=HEADERS)
     t0 = time.time()
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        body = fetch_text(url, timeout=timeout)
+        data = json.loads(body)
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         return {
             **item,
@@ -659,12 +681,25 @@ def main() -> int:
     )
     parser.add_argument("--run-id", default="", help="stable run id for timestamped outputs")
     parser.add_argument("--source-quality", type=Path, default=DEFAULT_SOURCE_QUALITY)
+    parser.add_argument(
+        "--fetch-proxy",
+        default="",
+        help="proxy for all HTTP fetches (e.g. socks5h://127.0.0.1:19081); "
+             "also set via IP_PROXY_FETCH_PROXY env",
+    )
     args = parser.parse_args()
     run_id = args.run_id or time.strftime("%Y%m%d_%H%M%S")
+    global FETCH_PROXY
+    if args.fetch_proxy:
+        FETCH_PROXY = args.fetch_proxy
+    elif not FETCH_PROXY:
+        FETCH_PROXY = None
 
     load_candidates.max_socks_per_source = args.max_socks_per_source
     only_kinds = set(args.only_kind or [])
     candidates = load_candidates()
+    if FETCH_PROXY:
+        print(json.dumps({"fetch_proxy": FETCH_PROXY[:12] + "...", "note": "all fetches routed through proxy"}, ensure_ascii=False))
     source_quality = load_source_quality(args.source_quality)
     candidates = prioritize_candidates(candidates, source_quality)
     if args.harvest_only:
