@@ -115,16 +115,6 @@ def call_grok(base_url: str, api_key: str, model: str, timeout: int) -> tuple[st
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": PROMPT}],
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "web_search",
-                    "description": "Search the web",
-                    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
-                },
-            }
-        ],
     }
     api_url = base_url.rstrip("/") + "/chat/completions"
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
