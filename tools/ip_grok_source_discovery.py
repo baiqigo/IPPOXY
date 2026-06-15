@@ -234,15 +234,15 @@ _STATIC_SOURCE_URLS: set[str] = {
 
 # Common raw file paths to try when expanding a github_repo URL into fetchable raw URLs
 _GITHUB_REPO_EXPANSION_PATHS = [
-    "main/sub.txt",
-    "main/v2ray.txt",
-    "main/clash.yaml",
-    "main/proxy-list.txt",
-    "main/socks5.txt",
-    "main/socks5Data",
-    "main/turn_results.txt",
-    "main/sstp_hosts.txt",
-    "main/result.txt",
+    "sub.txt",
+    "v2ray.txt",
+    "clash.yaml",
+    "proxy-list.txt",
+    "socks5.txt",
+    "socks5Data",
+    "turn_results.txt",
+    "sstp_hosts.txt",
+    "result.txt",
 ]
 
 _GITHUB_REPO_EXPANSION_BRANCHES = ["main"]
