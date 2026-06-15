@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refresh the sandbox runtime Xray/Resin pool from latest clean IP candidates."""
+"""Refresh the sandbox runtime Xray/Resin pool from IP candidate files."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import time
 import urllib.parse
 from pathlib import Path
@@ -28,7 +29,7 @@ DEFAULT_BASELINE = DOC_RUNTIME_DIR / "turn_xray_pool_20260608.json"
 DEFAULT_VERIFY = ROOT / "captures/ip_runtime_verify_latest.json"
 DEFAULT_REGISTRAR_FEEDBACK = ROOT / "captures/ip_registrar_feedback_latest.json"
 DEFAULT_SOURCE_QUALITY = RUNTIME / "research/proxy_source_quality_latest.json"
-DEFAULT_WORKER_HOST = os.environ.get("IP_PROXY_TURN_WORKER_HOST", "cdn.baiqi.xyz")
+DEFAULT_WORKER_HOST = os.environ.get("IP_PROXY_TURN_WORKER_HOST", "ip-proxy-turn-poc.khowk1isgv.workers.dev")
 DEFAULT_UUID = "2523c510-9ff0-415b-9582-93949bfae7e3"
 DEFAULT_MAX_FALLBACK_CANDIDATE_AGE_HOURS = float(os.environ.get("IP_PROXY_MAX_FALLBACK_CANDIDATE_AGE_HOURS", "48"))
 ALLOWED_POOL_MODES = {"strict", "relaxed"}
@@ -41,6 +42,18 @@ DEFAULT_MIN_COUNTRIES = int(os.environ.get("IP_PROXY_MIN_COUNTRIES", "8"))
 DEFAULT_MAX_COUNTRY_RATIO = float(os.environ.get("IP_PROXY_MAX_COUNTRY_RATIO", "0.40") or "0")
 DEFAULT_MAX_COMPANY_RATIO = float(os.environ.get("IP_PROXY_MAX_COMPANY_RATIO", "0.24") or "0")
 DEFAULT_MAX_ASN_RATIO = float(os.environ.get("IP_PROXY_MAX_ASN_RATIO", "0.24") or "0")
+RELAXED_QUANTITY_DEFAULTS = {
+    "limit": (80, "--limit", "IP_PROXY_POOL_SIZE"),
+    "min_clean": (1, "--min-clean", "IP_PROXY_MIN_CLEAN"),
+    "min_new_candidates": (55, "--min-new-candidates", "IP_PROXY_MIN_NEW_CANDIDATES"),
+    "max_risky_candidates": (-1, "--max-risky-candidates", "IP_PROXY_MAX_RISKY_CANDIDATES"),
+    "max_risky_ratio": (0.0, "--max-risky-ratio", "IP_PROXY_MAX_RISKY_RATIO"),
+    "min_strict_clean_selected": (0, "--min-strict-clean-selected", "IP_PROXY_MIN_STRICT_CLEAN_SELECTED"),
+    "min_countries": (0, "--min-countries", "IP_PROXY_MIN_COUNTRIES"),
+    "max_country_ratio": (0.0, "--max-country-ratio", "IP_PROXY_MAX_COUNTRY_RATIO"),
+    "max_company_ratio": (0.0, "--max-company-ratio", "IP_PROXY_MAX_COMPANY_RATIO"),
+    "max_asn_ratio": (0.0, "--max-asn-ratio", "IP_PROXY_MAX_ASN_RATIO"),
+}
 
 
 def slug(value: str) -> str:
@@ -75,7 +88,8 @@ def pool_priority(item: dict) -> int:
 
 
 def make_tag(item: dict) -> str:
-    bucket = classify(item)
+    tier = str(item.get("registration_tier") or "").lower()
+    bucket = "relaxed" if tier == "risky" or bool(item.get("relaxed_pool")) else classify(item)
     country = slug(item.get("country") or "xx")
     company = slug(item.get("company") or item.get("exit_ip") or "node")
     city = slug(item.get("city") or "")
@@ -171,6 +185,22 @@ def split_csv_values(value: str | None) -> set[str]:
     if not value:
         return set()
     return {part.strip().upper() for part in value.split(",") if part.strip()}
+
+
+def cli_flag_present(flag: str, argv: list[str] | None = None) -> bool:
+    argv = sys.argv[1:] if argv is None else argv
+    return any(part == flag or part.startswith(f"{flag}=") for part in argv)
+
+
+def apply_pool_mode_defaults(args: argparse.Namespace) -> None:
+    if args.pool_mode != "relaxed":
+        return
+    for attr, (value, flag, env_name) in RELAXED_QUANTITY_DEFAULTS.items():
+        if cli_flag_present(flag) or env_name in os.environ:
+            continue
+        if attr == "min_new_candidates":
+            value = min(safe_int(value), safe_int(args.limit))
+        setattr(args, attr, value)
 
 
 def file_sha(path: Path) -> str | None:
@@ -574,8 +604,17 @@ def resolve_candidate_input(
         key=lambda item: item.stat().st_mtime,
         reverse=True,
     )
+    # Limit fallback search to most recent files; accumulated empty cron
+    # outputs can create thousands of files that bloat the audit list and
+    # trigger ARG_MAX when the JSON is passed on the command line.
+    _MAX_FALLBACK_FILES = int(os.environ.get("IP_PROXY_MAX_FALLBACK_FILES", "30"))
+    fallback_files = fallback_files[:_MAX_FALLBACK_FILES]
     for fallback in fallback_files:
         if fallback == path:
+            continue
+        # Skip files that are clearly empty (3 bytes = "[]\n") to avoid
+        # unnecessary parsing and audit entries.
+        if fallback.stat().st_size <= 5:
             continue
         fallback_raw_candidates = turn_candidates(fallback, pool_mode)
         fallback_candidates, fallback_filter_meta = filter_candidates(
@@ -706,12 +745,13 @@ def normalize_row(item: dict, port: int, worker_host: str, uuid: str, source: st
     row["turn"] = raw
     row["local_port"] = port
     row["kind"] = "turn"
-    row["clean"] = True
     row["success"] = True
     row["source"] = source
     row["selection_source"] = source
     row["upstream_source"] = item.get("source")
-    row["registration_tier"] = candidate_tier(row)
+    tier = candidate_tier(row)
+    row["registration_tier"] = tier
+    row["clean"] = tier == "clean"
     row["registration_eligible"] = row["registration_tier"] in {"clean", "risky"}
     row["relaxed_pool"] = row.get("registration_tier") == "risky" or bool(item.get("relaxed_pool"))
     row["pool_class"] = classify(row)
@@ -730,12 +770,20 @@ def select_rows(
     worker_host: str,
     uuid: str,
     min_new_candidates: int = 0,
+    preserve_baseline_count: int = 0,
 ) -> tuple[list[dict], dict]:
     by_exit: dict[str, dict] = {}
     by_raw: set[str] = set()
+    by_port: set[int] = set()
     selected: list[dict] = []
 
-    def add(item: dict, source: str, allow_bad: bool = False) -> bool:
+    def next_available_port() -> int:
+        port = 19080
+        while port in by_port:
+            port += 1
+        return port
+
+    def add(item: dict, source: str, allow_bad: bool = False, port: int | None = None) -> bool:
         raw = item.get("turn") or item.get("raw")
         exit_ip = item.get("exit_ip")
         if not raw or not exit_ip or raw in by_raw or exit_ip in by_exit:
@@ -744,15 +792,42 @@ def select_rows(
             return False
         if len(selected) >= limit:
             return False
-        selected.append(normalize_row(item, 19080 + len(selected), worker_host, uuid, source))
+        if port is not None and port in by_port:
+            return False
+        local_port = int(port) if port is not None else next_available_port()
+        selected.append(normalize_row(item, local_port, worker_host, uuid, source))
         by_raw.add(str(raw))
+        by_port.add(local_port)
         by_exit[str(exit_ip)] = item
         return True
 
     min_new_candidates = max(0, min(int(min_new_candidates or 0), limit))
+    preserve_baseline_count = max(0, min(int(preserve_baseline_count or 0), max(0, limit - min_new_candidates)))
     baseline_good = [item for item in baseline if str(item.get("exit_ip")) not in bad_exit_ips]
     baseline_priority = [item for item in baseline_good if pool_priority(item) <= 1]
     baseline_fallback = [item for item in baseline_good if pool_priority(item) > 1]
+    baseline_by_port = sorted(
+        baseline_good,
+        key=lambda item: (safe_int(item.get("local_port")) or 999999, item.get("raw") or item.get("turn") or ""),
+    )
+
+    retained_protected_baseline = 0
+    if preserve_baseline_count:
+        for item in baseline_by_port:
+            port = safe_int(item.get("local_port")) or 19080 + len(selected)
+            if add(item, "baseline_protected", port=port):
+                retained_protected_baseline += 1
+            if retained_protected_baseline >= preserve_baseline_count:
+                break
+
+    retained_stable_baseline = 0
+    if preserve_baseline_count:
+        for item in baseline_by_port:
+            port = safe_int(item.get("local_port")) or 19080 + len(selected)
+            if add(item, "baseline_stable", port=port):
+                retained_stable_baseline += 1
+            if len(selected) >= limit:
+                break
 
     for item in baseline_priority:
         if len(selected) >= max(0, limit - min_new_candidates):
@@ -803,9 +878,12 @@ def select_rows(
         for exit_ip in retained_bad_exit_ips
     }
 
+    selected.sort(key=lambda row: int(row.get("local_port") or 0))
     return selected, {
         "bad_exit_ips": sorted(bad_exit_ips),
         "added_from_candidates": added_from_candidates,
+        "retained_protected_baseline": retained_protected_baseline,
+        "retained_stable_baseline": retained_stable_baseline,
         "retained_priority_baseline": sum(1 for row in selected if row.get("source") == "baseline"),
         "retained_reserved_baseline": retained_reserved_baseline,
         "retained_low_priority_baseline": retained_low_priority_baseline,
@@ -961,6 +1039,7 @@ def main() -> int:
         help="allow runtime apply even if the selected pool violates risky/diversity gates",
     )
     args = parser.parse_args()
+    apply_pool_mode_defaults(args)
     if args.input is None:
         args.input = default_input_for_pool_mode(args.pool_mode)
 
@@ -1016,6 +1095,7 @@ def main() -> int:
         args.worker_host,
         args.uuid,
         args.min_new_candidates,
+        max(0, args.limit - args.min_new_candidates) if args.pool_mode == "relaxed" else 0,
     )
     if len(rows) < args.limit:
         raise SystemExit(f"only selected {len(rows)} rows, need {args.limit}")
