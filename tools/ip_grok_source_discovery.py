@@ -15,15 +15,20 @@ import re
 import time
 import urllib.error
 import urllib.request
+import subprocess
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_DIR = ROOT / "docs/ip-proxy/research/runtime"
+IP_RUNTIME_DIR = Path(os.environ.get("IP_PROXY_RUNTIME_DIR", ROOT / ".runtime/ip-proxy"))
+RUNTIME_DIR = IP_RUNTIME_DIR / "research"
 RESEARCH_DIR = ROOT / "docs/ip-proxy/research"
+DYNAMIC_SOURCES_PATH = RUNTIME_DIR / "dynamic_sources.json"
 
-DEFAULT_BASE_URL = "https://api.baiqi.xyz/v1"
+DEFAULT_BASE_URL = "https://newapi.baiqi.xyz/v1"
 DEFAULT_MODEL = "grok-4.20-multi-agent-high"
+
+FETCH_PROXY: str | None = os.environ.get("IP_PROXY_FETCH_PROXY") or None
 
 
 PROMPT = """你是 IPPOXY 的公开资料检索助手。当前目标是寻找可周期性拉取的公开 URL、官方 API、GitHub raw 文件、订阅页面和工具仓库，用于维护授权环境里的网络出口候选目录。
@@ -95,6 +100,7 @@ def extract_urls(markdown: str) -> list[str]:
 
 
 def call_grok(base_url: str, api_key: str, model: str, timeout: int) -> tuple[str, str]:
+    """Call Grok API. Routes through FETCH_PROXY if set."""
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": PROMPT}],
@@ -109,19 +115,37 @@ def call_grok(base_url: str, api_key: str, model: str, timeout: int) -> tuple[st
             }
         ],
     }
-    req = urllib.request.Request(
-        base_url.rstrip("/") + "/chat/completions",
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json,text/event-stream,*/*",
-            "User-Agent": "Mozilla/5.0",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = resp.read().decode("utf-8", errors="ignore")
+    api_url = base_url.rstrip("/") + "/chat/completions"
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    if FETCH_PROXY:
+        cmd = [
+            "curl", "-sS", "--max-time", str(timeout),
+            "-x", FETCH_PROXY,
+            "-H", f"Authorization: Bearer {api_key}",
+            "-H", "Content-Type: application/json",
+            "-H", "Accept: application/json,text/event-stream,*/*",
+            "-H", "User-Agent: Mozilla/5.0",
+            "-d", "@-",
+            api_url,
+        ]
+        result = subprocess.run(cmd, input=data, capture_output=True, timeout=timeout + 30)
+        if result.returncode != 0:
+            raise OSError(f"curl grok API failed (rc={result.returncode}): {result.stderr.decode(errors='ignore').strip()}")
+        body = result.stdout.decode("utf-8", errors="ignore")
+    else:
+        req = urllib.request.Request(
+            api_url,
+            data=data,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json,text/event-stream,*/*",
+                "User-Agent": "Mozilla/5.0",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="ignore")
     return body, parse_sse_or_json(body)
 
 
@@ -131,10 +155,15 @@ def main() -> int:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--api-key", default=os.environ.get("GROK_API_KEY") or os.environ.get("BAIQI_API_KEY"))
     parser.add_argument("--timeout", type=int, default=180)
+    parser.add_argument("--fetch-proxy", default="", help="proxy for API calls; also via IP_PROXY_FETCH_PROXY env")
     args = parser.parse_args()
 
     if not args.api_key:
         raise SystemExit("missing --api-key or GROK_API_KEY/BAIQI_API_KEY")
+
+    global FETCH_PROXY
+    if args.fetch_proxy:
+        FETCH_PROXY = args.fetch_proxy
 
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     RESEARCH_DIR.mkdir(parents=True, exist_ok=True)
@@ -146,19 +175,26 @@ def main() -> int:
         raise SystemExit(f"grok request failed: {exc!r}") from exc
 
     urls = extract_urls(markdown)
+    dynamic_sources = classify_urls(urls)
+
     raw_path = RUNTIME_DIR / f"grok_ip_source_discovery_{stamp}.raw.txt"
     json_path = RUNTIME_DIR / f"grok_ip_source_discovery_{stamp}.json"
-    md_path = RESEARCH_DIR / "grok_ip_source_discovery_20260608.md"
+    md_path = RESEARCH_DIR / f"grok_ip_source_discovery_{time.strftime('%Y%m%d')}.md"
     raw_path.write_text(raw, encoding="utf-8")
     json_path.write_text(
-        json.dumps({"model": args.model, "urls": urls, "markdown": markdown}, ensure_ascii=False, indent=2),
+        json.dumps({"model": args.model, "urls": urls, "dynamic_sources": dynamic_sources, "markdown": markdown}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    DYNAMIC_SOURCES_PATH.write_text(
+        json.dumps({"updated": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": args.model, "sources": dynamic_sources}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     md_path.write_text(
-        "# Grok IP Source Discovery 2026-06-08\n\n"
+        f"# Grok IP Source Discovery {time.strftime('%Y-%m-%d')}\n\n"
         f"- Model: `{args.model}`\n"
-        f"- Raw: `docs/ip-proxy/research/runtime/{raw_path.name}`\n"
-        f"- Parsed JSON: `docs/ip-proxy/research/runtime/{json_path.name}`\n"
+        f"- Raw: `{raw_path.name}`\n"
+        f"- Parsed JSON: `{json_path.name}`\n"
+        f"- Dynamic sources: `{DYNAMIC_SOURCES_PATH.name}` ({len(dynamic_sources)} entries)\n"
         f"- Extracted URLs: {len(urls)}\n\n"
         "## Result\n\n"
         + markdown.strip()
@@ -167,8 +203,65 @@ def main() -> int:
         + "\n",
         encoding="utf-8",
     )
-    print(json.dumps({"urls": len(urls), "markdown": str(md_path), "json": str(json_path)}, ensure_ascii=False))
+    print(json.dumps({"urls": len(urls), "dynamic_sources": len(dynamic_sources), "markdown": str(md_path), "json": str(json_path), "dynamic_json": str(DYNAMIC_SOURCES_PATH)}, ensure_ascii=False))
     return 0
+
+
+_STATIC_SOURCE_URLS: set[str] = {
+    "https://sub.cmliussss.net/vpngate",
+    "https://www.vpngate.net/api/iphone/",
+    "https://raw.githubusercontent.com/Delta-Kronecker/Vpn-Gate/refs/heads/main/sstp_hosts.txt",
+    "https://raw.githubusercontent.com/F0rc3Run/F0rc3Run/refs/heads/main/sstp-configs/sstp_with_country.txt",
+    "https://raw.githubusercontent.com/ToiCF/CF-Workers-TURN/main/turn_results.txt",
+    "https://raw.githubusercontent.com/cmliu/Socks2Vlesssub/main/socks5api.txt",
+    "https://raw.githubusercontent.com/cmliu/WorkerVless2sub/main/socks5Data",
+    "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt",
+    "https://api.proxyscrape.com/v4/free-proxy-list/get?protocol=socks5&format=txt&timeout=10000&country=all",
+    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
+}
+
+
+def classify_urls(urls: list[str]) -> list[dict]:
+    """Classify discovered URLs by source_type heuristics."""
+    sources: list[dict] = []
+    for url in urls:
+        if url in _STATIC_SOURCE_URLS:
+            continue
+        url_lower = url.lower()
+        if "vpngate" in url_lower or "opengw" in url_lower or "sstp" in url_lower:
+            source_type = "sstp_subscription"
+        elif "turn" in url_lower and "cf-workers" in url_lower:
+            source_type = "turn_list"
+        elif "socks5" in url_lower or "socks" in url_lower or "proxy-list" in url_lower or "proxyscrape" in url_lower or "proxifly" in url_lower:
+            source_type = "socks_subscription"
+        elif "raw.githubusercontent.com" in url_lower:
+            source_type = "github_raw"
+        elif "api." in url_lower and ("vpngate" in url_lower or "proxy" in url_lower):
+            source_type = "official_api"
+        elif "github.com" in url_lower and "raw" not in url_lower:
+            source_type = "github_repo"
+        else:
+            source_type = "other"
+        if source_type in ("sstp_subscription", "official_api"):
+            expected_kind = "sstp"
+        elif source_type == "turn_list":
+            expected_kind = "turn"
+        elif source_type == "socks_subscription":
+            expected_kind = "socks5"
+        elif source_type == "github_raw":
+            if any(kw in url_lower for kw in ("v2ray", "vless", "vmess", "clash", "trojan", "sub", "free")):
+                expected_kind = "subscription"
+            else:
+                expected_kind = "unknown"
+        else:
+            expected_kind = "unknown"
+        sources.append({
+            "url": url,
+            "source_type": source_type,
+            "expected_kind": expected_kind,
+            "fetchable": source_type in ("sstp_subscription", "official_api", "github_raw", "socks_subscription", "turn_list"),
+        })
+    return sources
 
 
 if __name__ == "__main__":

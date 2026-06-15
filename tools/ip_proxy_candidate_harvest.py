@@ -239,6 +239,8 @@ def load_candidates() -> list[dict]:
 
     load_socks_sources(candidates, load_candidates.max_socks_per_source)
 
+    load_dynamic_sources(candidates)
+
     dedup: list[dict] = []
     seen: set[str] = set()
     for item in candidates:
@@ -258,6 +260,68 @@ def read_json(path: Path, default: object) -> object:
     if not path.exists():
         return default
     return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def load_dynamic_sources(candidates: list[dict]) -> None:
+    """Load supplementary sources from dynamic_sources.json (written by ip_grok_source_discovery.py)."""
+    dynamic_path = RUNTIME_DIR / "dynamic_sources.json"
+    if not dynamic_path.exists():
+        return
+    try:
+        data = json.loads(dynamic_path.read_text(encoding="utf-8-sig"))
+    except (json.JSONDecodeError, OSError):
+        return
+    sources = data.get("sources") or []
+    if not sources:
+        return
+    static_urls = set(SOURCES.values())
+    for entry in sources:
+        url = entry.get("url", "")
+        if not url or url in static_urls or not entry.get("fetchable"):
+            continue
+        expected_kind = entry.get("expected_kind", "unknown")
+        source_name = f"grok_dynamic_{entry.get('source_type', 'unknown')}"
+        try:
+            text = fetch_text(url, timeout=20)
+        except (OSError, TimeoutError) as exc:
+            print(json.dumps({"source": source_name, "url": url, "error": repr(exc)}, ensure_ascii=False))
+            continue
+        if expected_kind == "sstp":
+            for blob in maybe_decode_base64(text):
+                for m in re.finditer(r"sstp://[^\s\r\n]+", blob):
+                    add_candidate(candidates, "sstp", m.group(0), source_name)
+                for line in blob.splitlines():
+                    s = line.strip()
+                    if s and ("opengw.net" in s or re.match(r"^[A-Za-z0-9.-]+:\d+$", s)):
+                        if not s.startswith("sstp://"):
+                            s = "sstp://vpn:vpn@" + s
+                        add_candidate(candidates, "sstp", s, source_name)
+        elif expected_kind == "turn":
+            for line in text.splitlines():
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                m = re.match(r"^([A-Za-z0-9.-]+:\d+)", s)
+                if m:
+                    cred = re.search(r"CRED\(([^:()\s]+):([^()\s]+)\)", s)
+                    raw = f"turn://{cred.group(1)}:{cred.group(2)}@{m.group(1)}" if cred else f"turn://{m.group(1)}"
+                    add_candidate(candidates, "turn", raw, source_name)
+        elif expected_kind == "socks5":
+            for line in text.splitlines():
+                add_socks5_line(candidates, line, source_name)
+        elif expected_kind == "subscription":
+            for blob in maybe_decode_base64(text):
+                for proto in ["vmess", "vless", "trojan", "ss"]:
+                    for m in re.finditer(rf"{proto}://[^\s\r\n]+", blob):
+                        add_candidate(candidates, proto, m.group(0), source_name)
+        else:
+            # Unknown kind: try generic socks5/turn/sstp extraction
+            for line in text.splitlines():
+                add_socks5_line(candidates, line, source_name)
+            for m in re.finditer(r"turn://[^\s\r\n]+", text):
+                add_candidate(candidates, "turn", m.group(0), source_name)
+            for m in re.finditer(r"sstp://[^\s\r\n]+", text):
+                add_candidate(candidates, "sstp", m.group(0), source_name)
 
 
 def safe_int(value: object) -> int:
