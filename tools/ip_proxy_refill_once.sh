@@ -14,7 +14,18 @@ MAX_SOCKS_PER_SOURCE="${MAX_SOCKS_PER_SOURCE:-200}"
 ONLY_KIND="${ONLY_KIND:-}"
 INCLUDE_COOLDOWN_SOURCES="${INCLUDE_COOLDOWN_SOURCES:-0}"
 RELAX_SOURCE_CAP="${RELAX_SOURCE_CAP:-0}"
-IP_PROXY_POOL_MODE="${IP_PROXY_POOL_MODE:-strict}"
+IP_PROXY_POOL_SIZE_WAS_SET="${IP_PROXY_POOL_SIZE+x}"
+IP_PROXY_MIN_CLEAN_WAS_SET="${IP_PROXY_MIN_CLEAN+x}"
+IP_PROXY_MIN_NEW_CANDIDATES_WAS_SET="${IP_PROXY_MIN_NEW_CANDIDATES+x}"
+IP_PROXY_MAX_RISKY_CANDIDATES_WAS_SET="${IP_PROXY_MAX_RISKY_CANDIDATES+x}"
+IP_PROXY_MAX_RISKY_RATIO_WAS_SET="${IP_PROXY_MAX_RISKY_RATIO+x}"
+IP_PROXY_MIN_STRICT_CLEAN_SELECTED_WAS_SET="${IP_PROXY_MIN_STRICT_CLEAN_SELECTED+x}"
+IP_PROXY_MIN_COUNTRIES_WAS_SET="${IP_PROXY_MIN_COUNTRIES+x}"
+IP_PROXY_MAX_COUNTRY_RATIO_WAS_SET="${IP_PROXY_MAX_COUNTRY_RATIO+x}"
+IP_PROXY_MAX_COMPANY_RATIO_WAS_SET="${IP_PROXY_MAX_COMPANY_RATIO+x}"
+IP_PROXY_MAX_ASN_RATIO_WAS_SET="${IP_PROXY_MAX_ASN_RATIO+x}"
+IP_PROXY_POOL_MODE="${IP_PROXY_POOL_MODE:-relaxed}"
+IP_PROXY_POOL_SIZE="${IP_PROXY_POOL_SIZE:-25}"
 IP_PROXY_MIN_CLEAN="${IP_PROXY_MIN_CLEAN:-12}"
 IP_PROXY_MIN_NEW_CANDIDATES="${IP_PROXY_MIN_NEW_CANDIDATES:-8}"
 IP_PROXY_EXCLUDE_COUNTRY="${IP_PROXY_EXCLUDE_COUNTRY:-}"
@@ -65,9 +76,15 @@ fi
 
 "$PYTHON_BIN" tools/ip_proxy_candidate_harvest.py "${HARVEST_ARGS[@]}"
 
-"$PYTHON_BIN" tools/ip_proxy_classify_clean.py \
+CLASSIFY_JSON="$("$PYTHON_BIN" tools/ip_proxy_classify_clean.py \
   --run-id "$RUN_ID" \
-  --input ".runtime/ip-proxy/research/proxy_candidate_check_${RUN_ID}.json"
+  --input ".runtime/ip-proxy/research/proxy_candidate_check_${RUN_ID}.json")"
+echo "$CLASSIFY_JSON"
+CLASSIFY_LATEST_UPDATED="$("$PYTHON_BIN" -c 'import json,sys; print("1" if json.loads(sys.argv[1]).get("latest_updated") else "0")' "$CLASSIFY_JSON")"
+if [[ "$CLASSIFY_LATEST_UPDATED" != "1" && "${IP_PROXY_APPLY_ON_STALE_CLASSIFY:-0}" != "1" ]]; then
+  IP_PROXY_APPLY_RUNTIME="0"
+  echo '{"status":"guarded","reason":"classify_latest_not_updated","apply_runtime":false}'
+fi
 
 "$PYTHON_BIN" tools/ip_proxy_source_quality_report.py \
   --input ".runtime/ip-proxy/research/proxy_candidate_check_${RUN_ID}.json" || true
@@ -95,6 +112,18 @@ if [[ "$POOL_MODE" != "strict" && "$POOL_MODE" != "relaxed" ]]; then
   echo "{\"status\":\"error\",\"reason\":\"invalid_IP_PROXY_POOL_MODE\",\"value\":\"$IP_PROXY_POOL_MODE\"}"
   exit 2
 fi
+if [[ "$POOL_MODE" == "relaxed" ]]; then
+  [[ -z "$IP_PROXY_POOL_SIZE_WAS_SET" ]] && IP_PROXY_POOL_SIZE="80"
+  [[ -z "$IP_PROXY_MIN_CLEAN_WAS_SET" ]] && IP_PROXY_MIN_CLEAN="1"
+  [[ -z "$IP_PROXY_MIN_NEW_CANDIDATES_WAS_SET" ]] && IP_PROXY_MIN_NEW_CANDIDATES="55"
+  [[ -z "$IP_PROXY_MAX_RISKY_CANDIDATES_WAS_SET" ]] && IP_PROXY_MAX_RISKY_CANDIDATES="-1"
+  [[ -z "$IP_PROXY_MAX_RISKY_RATIO_WAS_SET" ]] && IP_PROXY_MAX_RISKY_RATIO="0"
+  [[ -z "$IP_PROXY_MIN_STRICT_CLEAN_SELECTED_WAS_SET" ]] && IP_PROXY_MIN_STRICT_CLEAN_SELECTED="0"
+  [[ -z "$IP_PROXY_MIN_COUNTRIES_WAS_SET" ]] && IP_PROXY_MIN_COUNTRIES="0"
+  [[ -z "$IP_PROXY_MAX_COUNTRY_RATIO_WAS_SET" ]] && IP_PROXY_MAX_COUNTRY_RATIO="0"
+  [[ -z "$IP_PROXY_MAX_COMPANY_RATIO_WAS_SET" ]] && IP_PROXY_MAX_COMPANY_RATIO="0"
+  [[ -z "$IP_PROXY_MAX_ASN_RATIO_WAS_SET" ]] && IP_PROXY_MAX_ASN_RATIO="0"
+fi
 
 POOL_REFRESH_INPUT=".runtime/ip-proxy/resin/clean_candidates_classified.latest.json"
 if [[ "$POOL_MODE" == "relaxed" ]]; then
@@ -103,6 +132,7 @@ fi
 POOL_REFRESH_ARGS=(
   --input "$POOL_REFRESH_INPUT"
   --pool-mode "$POOL_MODE"
+  --limit "$IP_PROXY_POOL_SIZE"
   --min-clean "$IP_PROXY_MIN_CLEAN"
   --min-new-candidates "$IP_PROXY_MIN_NEW_CANDIDATES"
   --exclude-country "$IP_PROXY_EXCLUDE_COUNTRY"
@@ -117,6 +147,12 @@ POOL_REFRESH_ARGS=(
 )
 if [[ "${IP_PROXY_ALLOW_SELECTION_QUALITY_FAILURES:-0}" == "1" ]]; then
   POOL_REFRESH_ARGS+=(--allow-selection-quality-failures)
+fi
+if [[ "${IP_PROXY_ALLOW_STALE_FALLBACK_CANDIDATES:-0}" == "1" ]]; then
+  POOL_REFRESH_ARGS+=(--allow-stale-fallback-candidates)
+fi
+if [[ -n "${IP_PROXY_TURN_WORKER_HOST:-}" ]]; then
+  POOL_REFRESH_ARGS+=(--worker-host "$IP_PROXY_TURN_WORKER_HOST")
 fi
 if [[ "${IP_PROXY_APPLY_RUNTIME:-1}" != "1" ]]; then
   POOL_REFRESH_ARGS+=(--dry-run)
