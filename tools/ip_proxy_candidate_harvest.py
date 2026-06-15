@@ -70,10 +70,10 @@ def _fetch_curl(url: str, timeout: int = 30) -> str:
         "-H", "Referer: https://check.socks5.cmliussss.net/",
         url,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 10)
+    result = subprocess.run(cmd, capture_output=True, timeout=timeout + 10)
     if result.returncode != 0:
-        raise OSError(f"curl failed (rc={result.returncode}): {result.stderr.strip()}")
-    return result.stdout
+        raise OSError(f"curl failed (rc={result.returncode}): {result.stderr.decode('utf-8', errors='ignore').strip()}")
+    return result.stdout.decode("utf-8", errors="ignore")
 
 
 def safe_fetch_text(source: str, timeout: int = 30) -> str:
