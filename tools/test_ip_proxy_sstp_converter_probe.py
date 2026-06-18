@@ -53,10 +53,17 @@ def test_converter_artifact_writer_outputs_entrypoint_and_masked_plan(tmp_path):
     )
     written = write_probe_artifacts(plan, tmp_path / "probe")
 
-    assert Path(written["entrypoint"]).read_text(encoding="utf-8").startswith("#!/usr/bin/env bash")
+    entrypoint_text = Path(written["entrypoint"]).read_text(encoding="utf-8")
+    assert entrypoint_text.startswith("#!/usr/bin/env bash")
     if os.name == "posix":
         assert Path(written["entrypoint"]).stat().st_mode & 0o111
-    assert "SSTP_PASSWORD" in Path(written["entrypoint"]).read_text(encoding="utf-8")
+    assert "SSTP_PASSWORD" in entrypoint_text
+    assert "--tls-ext" in entrypoint_text
+    assert "--ipparam" in entrypoint_text
+    assert "--save-server-route" in entrypoint_text
+    assert "require-mschap-v2" in entrypoint_text
+    assert "require-mppe" in entrypoint_text
+    assert "nobsdcomp nodeflate" in entrypoint_text
     plan_text = Path(written["plan"]).read_text(encoding="utf-8")
     assert "sstp://vpn:***@public-vpn-210.opengw.net:443" in plan_text
     if os.name == "posix":

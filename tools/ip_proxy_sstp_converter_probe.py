@@ -143,11 +143,14 @@ apt-get install -y --no-install-recommends \\
   >>/work/probe.log 2>&1
 
 log "starting sstpc"
-sstpc --log-stderr --cert-warn \\
+SSTP_IPPARAM="ippoxy-${SSTP_SERVER//[^a-zA-Z0-9]/-}"
+sstpc --log-stderr --log-level 4 --cert-warn --tls-ext --save-server-route --ipparam "$SSTP_IPPARAM" \\
   --user "$SSTP_USER" \\
   --password "$SSTP_PASSWORD" \\
   "$SSTP_SERVER" \\
-  noauth refuse-eap defaultroute usepeerdns \\
+  noauth defaultroute usepeerdns \\
+  require-mschap-v2 require-mppe refuse-eap refuse-pap refuse-chap refuse-mschap \\
+  nobsdcomp nodeflate \\
   >>/work/probe.log 2>&1 &
 
 for _ in $(seq 1 35); do
