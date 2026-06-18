@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-import argparse, base64, hashlib, json, os, re, subprocess, sys, time
+import argparse, base64, concurrent.futures, hashlib, json, os, re, subprocess, sys, time
 from collections import Counter
 from pathlib import Path
 
@@ -14,6 +14,7 @@ RESIN_DIR = RUNTIME / 'resin'
 BASE_PORT = int(os.environ.get('IP_PROXY_STAGE0_BASE_PORT', '20000'))
 DEFAULT_BATCH_SIZE = int(os.environ.get('IP_PROXY_STAGE0_BATCH_SIZE', '50'))
 DEFAULT_TIMEOUT = int(os.environ.get('IP_PROXY_STAGE0_TIMEOUT', '8'))
+DEFAULT_WORKERS = int(os.environ.get('IP_PROXY_STAGE0_WORKERS', '10'))
 DEFAULT_CONTAINER_NAME = 'ippoxy-stage0-check'
 XRAY_IMAGE = os.environ.get('IP_PROXY_XRAY_IMAGE', 'ghcr.io/xtls/xray-core:latest')
 SUPPORTED_KINDS = {'vless', 'vmess', 'trojan', 'ss'}
@@ -336,6 +337,8 @@ def main():
     parser.add_argument('--run-id', default='')
     parser.add_argument('--batch-size', type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT)
+    parser.add_argument('--workers', type=int, default=DEFAULT_WORKERS,
+                        help='concurrent curl checks inside each Xray batch')
     parser.add_argument('--base-port', type=int, default=BASE_PORT)
     parser.add_argument('--container', default=DEFAULT_CONTAINER_NAME)
     parser.add_argument('--keep-container', action='store_true')
@@ -429,9 +432,20 @@ def main():
                     'dedup_key': c.get('dedup_key', '')})
             continue
 
-        for i, c in enumerate(batch):
+        def check_batch_item(index_and_candidate):
+            i, c = index_and_candidate
             port = batch_port_base + i
             ip_info = check_exit_ip(port, args.timeout)
+            return i, c, port, ip_info
+
+        worker_count = max(1, int(args.workers or 1))
+        if worker_count == 1 or len(batch) <= 1:
+            checked_items = [check_batch_item(item) for item in enumerate(batch)]
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(worker_count, len(batch))) as executor:
+                checked_items = list(executor.map(check_batch_item, enumerate(batch)))
+
+        for i, c, port, ip_info in checked_items:
             if ip_info is None:
                 tier, dirty = 'dirty', ['dead']
                 exit_ip = country = city = company = company_type = asn_type = isp = org = ''
