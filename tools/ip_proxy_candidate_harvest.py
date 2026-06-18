@@ -262,6 +262,36 @@ def read_json(path: Path, default: object) -> object:
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
+def normalize_candidate_rows(candidates: list[dict]) -> list[dict]:
+    dedup: list[dict] = []
+    seen: set[str] = set()
+    for item in candidates:
+        raw = str(item.get("raw") or "").strip()
+        kind = str(item.get("kind") or "").strip()
+        if not raw or not kind or raw in seen:
+            continue
+        seen.add(raw)
+        row = dict(item)
+        row["kind"] = kind
+        row["raw"] = raw
+        row["source"] = str(row.get("source") or row.get("source_id") or "unknown")
+        row["port"] = row.get("port") or extract_port(raw)
+        dedup.append(row)
+    return dedup
+
+
+def load_extra_candidate_pools(paths: list[Path]) -> list[dict]:
+    candidates: list[dict] = []
+    for path in paths:
+        data = read_json(path, [])
+        if not isinstance(data, list):
+            continue
+        for item in data:
+            if isinstance(item, dict):
+                candidates.append(dict(item))
+    return normalize_candidate_rows(candidates)
+
+
 def load_dynamic_sources(candidates: list[dict]) -> None:
     """Load supplementary sources from dynamic_sources.json (written by ip_grok_source_discovery.py)."""
     dynamic_path = RUNTIME_DIR / "dynamic_sources.json"
@@ -739,12 +769,24 @@ def main() -> int:
     parser.add_argument(
         "--only-kind",
         action="append",
-        choices=["turn", "sstp", "socks5"],
+        choices=["turn", "sstp", "socks4", "socks5", "http", "https"],
         default=[],
         help="limit checked candidates to the given kind; repeat to allow multiple kinds",
     )
     parser.add_argument("--run-id", default="", help="stable run id for timestamped outputs")
     parser.add_argument("--source-quality", type=Path, default=DEFAULT_SOURCE_QUALITY)
+    parser.add_argument(
+        "--extra-candidate-pool",
+        type=Path,
+        action="append",
+        default=[],
+        help="additional JSON candidate pool, such as layer0_http_socks_pool_<run_id>.json",
+    )
+    parser.add_argument(
+        "--skip-default-sources",
+        action="store_true",
+        help="only use --extra-candidate-pool inputs; useful for local/offline intake tests",
+    )
     parser.add_argument(
         "--fetch-proxy",
         default="",
@@ -761,7 +803,10 @@ def main() -> int:
 
     load_candidates.max_socks_per_source = args.max_socks_per_source
     only_kinds = set(args.only_kind or [])
-    candidates = load_candidates()
+    candidates = [] if args.skip_default_sources else load_candidates()
+    if args.extra_candidate_pool:
+        candidates.extend(load_extra_candidate_pools(args.extra_candidate_pool))
+        candidates = normalize_candidate_rows(candidates)
     if FETCH_PROXY:
         print(json.dumps({"fetch_proxy": FETCH_PROXY[:12] + "...", "note": "all fetches routed through proxy"}, ensure_ascii=False))
     source_quality = load_source_quality(args.source_quality)

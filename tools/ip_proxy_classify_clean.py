@@ -48,9 +48,13 @@ def registration_tier(item: dict) -> str:
         return "clean"
     if dirty & HARD_DIRTY_FLAGS:
         return "dirty"
+    country = (item.get("country") or "").upper()
+    if country == "CN":
+        return "dirty"
     if dirty <= RISKY_DIRTY_FLAGS:
         return "risky"
-    return "dirty"
+    # L3: alive + non-CN + non-hard-dirty but has other dirty flags
+    return "dirty_alive_noncn"
 
 
 def bucket(item: dict) -> str:
@@ -166,12 +170,13 @@ def main() -> int:
     for item in candidate_rows:
         item["registration_tier"] = registration_tier(item)
         item["pool_bucket"] = bucket(item)
-        item["registration_eligible"] = item["registration_tier"] in {"clean", "risky"}
+        item["registration_eligible"] = item["registration_tier"] in {"clean", "risky", "dirty_alive_noncn"}
 
     clean = [item for item in candidate_rows if item["registration_tier"] == "clean"]
     relaxed = [item for item in candidate_rows if item["registration_tier"] in {"clean", "risky"}]
     dirty = [item for item in candidate_rows if item["registration_tier"] == "dirty"]
-    for items in (clean, relaxed, dirty):
+    l3_raw = [item for item in candidate_rows if item["registration_tier"] == "dirty_alive_noncn"]
+    for items in (clean, relaxed, dirty, l3_raw):
         items.sort(key=lambda item: (item["registration_tier"], bucket(item), item.get("kind") or "", item.get("responseTime") or 999999))
 
     counts = Counter(item["pool_bucket"] for item in clean)
@@ -195,11 +200,13 @@ def main() -> int:
     write_json(RESIN_DIR / f"clean_candidates_classified_{run_id}.json", clean)
     write_json(RESIN_DIR / f"relaxed_candidates_classified_{run_id}.json", relaxed)
     write_json(RESIN_DIR / f"dirty_candidates_classified_{run_id}.json", dirty)
+    write_json(RESIN_DIR / f"l3_raw_candidates_classified_{run_id}.json", l3_raw)
     write_json(RESIN_DIR / f"all_candidates_classified_{run_id}.json", candidate_rows)
     if update_latest:
         write_json(RESIN_DIR / "clean_candidates_classified.latest.json", clean)
         write_json(RESIN_DIR / "relaxed_candidates_classified.latest.json", relaxed)
         write_json(RESIN_DIR / "dirty_candidates_classified.latest.json", dirty)
+        write_json(RESIN_DIR / "l3_raw_candidates_classified.latest.json", l3_raw)
         write_json(RESIN_DIR / "all_candidates_classified.latest.json", candidate_rows)
 
     for name in ["residential", "static", "risk_review"]:
@@ -214,6 +221,12 @@ def main() -> int:
         atomic_write_text(RESIN_DIR / f"{name}_relaxed_candidates_{run_id}.txt", text)
         if update_latest:
             atomic_write_text(RESIN_DIR / f"{name}_relaxed_candidates.latest.txt", text)
+    # L3 raw tier output
+    l3_rows = [item["raw"] for item in l3_raw]
+    l3_text = ("\n".join(l3_rows) + "\n") if l3_rows else ""
+    atomic_write_text(RESIN_DIR / f"l3_raw_candidates_{run_id}.txt", l3_text)
+    if update_latest:
+        atomic_write_text(RESIN_DIR / "l3_raw_candidates.latest.txt", l3_text)
 
     lines = [
         f"# Candidate Classification {display_date(run_id)}",
@@ -224,6 +237,7 @@ def main() -> int:
         f"- Relaxed candidates: {len(relaxed)}",
         f"- Risky candidates: {relaxed_counts['risky']}",
         f"- Dirty candidates: {len(dirty)}",
+        f"- L3 raw candidates: {len(l3_raw)}",
         f"- Residential priority: {counts['residential']}",
         f"- Static/education/business: {counts['static']}",
         f"- Risk review: {counts['risk_review']}",
@@ -348,6 +362,7 @@ def main() -> int:
                 "relaxed": len(relaxed),
                 "risky": relaxed_counts["risky"],
                 "dirty": len(dirty),
+                "l3_raw": len(l3_raw),
                 "pool_buckets": dict(counts),
                 "latest_updated": update_latest,
                 "latest_guard": latest_guard,

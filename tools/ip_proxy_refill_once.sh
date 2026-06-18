@@ -50,6 +50,32 @@ if [[ "$WITH_GROK" == "1" ]]; then
   fi
 fi
 
+# Layer 0 intake: fetch source registry and emit stable lane artifacts.
+WITH_LAYER0_INTAKE="${WITH_LAYER0_INTAKE:-1}"
+WITH_LAYER0_CONSUMER="${WITH_LAYER0_CONSUMER:-0}"
+WITH_LAYER0_HTTP_SOCKS_CHECK="${WITH_LAYER0_HTTP_SOCKS_CHECK:-1}"
+WITH_LAYER0_STAGE0_HEALTHCHECK="${WITH_LAYER0_STAGE0_HEALTHCHECK:-0}"
+LAYER0_SOURCE_REGISTRY="${LAYER0_SOURCE_REGISTRY:-tools/layer0_sources.json}"
+LAYER0_INTAKE_TIMEOUT="${LAYER0_INTAKE_TIMEOUT:-8}"
+LAYER0_INTAKE_WORKERS="${LAYER0_INTAKE_WORKERS:-8}"
+LAYER0_HTTP_SOCKS_POOL=".runtime/ip-proxy/research/layer0_http_socks_pool_${RUN_ID}.json"
+LAYER0_SUBSCRIPTION_RAW=".runtime/ip-proxy/research/layer0_subscription_stage0_raw_${RUN_ID}.json"
+if [[ "$WITH_LAYER0_INTAKE" == "1" ]]; then
+  LAYER0_INTAKE_ARGS=(
+    --config "$LAYER0_SOURCE_REGISTRY"
+    --output-dir ".runtime/ip-proxy/research"
+    --run-id "$RUN_ID"
+    --timeout "$LAYER0_INTAKE_TIMEOUT"
+    --workers "$LAYER0_INTAKE_WORKERS"
+  )
+  if [[ "${IP_PROXY_APPLY_RUNTIME:-1}" != "1" ]]; then
+    LAYER0_INTAKE_ARGS+=(--dry-run)
+  fi
+  "$PYTHON_BIN" tools/ip_proxy_layer0_intake.py "${LAYER0_INTAKE_ARGS[@]}" || true
+elif [[ "$WITH_LAYER0_CONSUMER" == "1" ]]; then
+  "$PYTHON_BIN" tools/ip_proxy_layer0_consumer.py --run-id "$RUN_ID" || true
+fi
+
 HARVEST_ARGS=(
   --run-id "$RUN_ID" \
   --workers "$WORKERS" \
@@ -59,6 +85,9 @@ HARVEST_ARGS=(
   --max-check-per-kind "$MAX_CHECK_PER_KIND" \
   --max-socks-per-source "$MAX_SOCKS_PER_SOURCE"
 )
+if [[ "$WITH_LAYER0_HTTP_SOCKS_CHECK" == "1" && -s "$LAYER0_HTTP_SOCKS_POOL" ]]; then
+  HARVEST_ARGS+=(--extra-candidate-pool "$LAYER0_HTTP_SOCKS_POOL")
+fi
 if [[ "$INCLUDE_COOLDOWN_SOURCES" == "1" ]]; then
   HARVEST_ARGS+=(--include-cooldown-sources)
 fi
@@ -75,6 +104,12 @@ if [[ -n "$ONLY_KIND" ]]; then
 fi
 
 "$PYTHON_BIN" tools/ip_proxy_candidate_harvest.py "${HARVEST_ARGS[@]}"
+
+if [[ "$WITH_LAYER0_STAGE0_HEALTHCHECK" == "1" && -s "$LAYER0_SUBSCRIPTION_RAW" ]]; then
+  "$PYTHON_BIN" tools/ip_proxy_stage0_healthcheck.py \
+    --run-id "${RUN_ID}_layer0_stage0" \
+    --input "$LAYER0_SUBSCRIPTION_RAW" || true
+fi
 
 CLASSIFY_JSON="$("$PYTHON_BIN" tools/ip_proxy_classify_clean.py \
   --run-id "$RUN_ID" \
