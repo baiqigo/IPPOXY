@@ -339,6 +339,8 @@ def main():
     parser.add_argument('--base-port', type=int, default=BASE_PORT)
     parser.add_argument('--container', default=DEFAULT_CONTAINER_NAME)
     parser.add_argument('--keep-container', action='store_true')
+    parser.add_argument('--no-latest', action='store_true',
+                        help='Do not write .latest.json files')
     parser.add_argument('--start-index', type=int, default=0,
                         help='skip this many parsed candidates before checking')
     parser.add_argument('--max-candidates', type=int, default=0,
@@ -488,7 +490,8 @@ def main():
 
     out_check = RESEARCH_DIR / f'proxy_candidate_check_{run_id}.json'
     atomic_write_json(out_check, all_results)
-    atomic_write_json(RESEARCH_DIR / 'proxy_candidate_check.latest.json', all_results)
+    if not args.no_latest:
+        atomic_write_json(RESEARCH_DIR / 'proxy_candidate_check.latest.json', all_results)
 
     clean = [r for r in all_results if r['registration_tier'] == 'clean']
     relaxed = [r for r in all_results if r['registration_tier'] in {'clean', 'risky'}]
@@ -511,11 +514,13 @@ def main():
     atomic_write_json(RESIN_DIR / f'all_candidates_classified_{run_id}.json', all_results)
 
     if clean:
-        atomic_write_json(RESIN_DIR / 'clean_candidates_classified.latest.json', clean)
-        print(f'Updated clean_candidates_classified.latest.json with {len(clean)} clean')
+        if not args.no_latest:
+            atomic_write_json(RESIN_DIR / 'clean_candidates_classified.latest.json', clean)
+            print(f'Updated clean_candidates_classified.latest.json with {len(clean)} clean')
     if relaxed:
-        atomic_write_json(RESIN_DIR / 'relaxed_candidates_classified.latest.json', relaxed)
-        print(f'Updated relaxed_candidates_classified.latest.json with {len(relaxed)} relaxed')
+        if not args.no_latest:
+            atomic_write_json(RESIN_DIR / 'relaxed_candidates_classified.latest.json', relaxed)
+            print(f'Updated relaxed_candidates_classified.latest.json with {len(relaxed)} relaxed')
 
     tier_counts = Counter(r['registration_tier'] for r in all_results)
     print()
