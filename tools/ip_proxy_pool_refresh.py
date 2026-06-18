@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import copy
 import hashlib
 import json
 import os
@@ -34,7 +35,17 @@ DEFAULT_WORKER_HOST = os.environ.get("IP_PROXY_TURN_WORKER_HOST", "ip-proxy-turn
 DEFAULT_UUID = "2523c510-9ff0-415b-9582-93949bfae7e3"
 DEFAULT_MAX_FALLBACK_CANDIDATE_AGE_HOURS = float(os.environ.get("IP_PROXY_MAX_FALLBACK_CANDIDATE_AGE_HOURS", "48"))
 ALLOWED_POOL_MODES = {"strict", "relaxed", "raw"}
-RUNTIME_CANDIDATE_KINDS = {"turn", "http", "https", "socks4", "socks5"}
+RUNTIME_CANDIDATE_KINDS = {
+    "turn",
+    "http",
+    "https",
+    "socks4",
+    "socks5",
+    "vless",
+    "vmess",
+    "trojan",
+    "ss",
+}
 RISKY_DIRTY_FLAGS = {"is_datacenter", "is_proxy", "is_vpn"}
 HARD_DIRTY_FLAGS = {"is_tor", "is_abuser", "is_bogon"}
 DEFAULT_MAX_RISKY_CANDIDATES = int(os.environ.get("IP_PROXY_MAX_RISKY_CANDIDATES", "10"))
@@ -182,6 +193,15 @@ def outbound_for_row(row: dict, uuid: str, worker_host: str, outbound_tag: str) 
             "protocol": "socks",
             "settings": {"servers": [parse_proxy_url(raw, kind)]},
         }
+    if kind in {"vless", "vmess", "trojan", "ss"}:
+        from ip_proxy_stage0_healthcheck import PARSERS
+
+        parser = PARSERS.get(kind)
+        parsed = parser(raw) if parser else None
+        if parsed and parsed.get("outbound"):
+            outbound = copy.deepcopy(parsed["outbound"])
+            outbound["tag"] = outbound_tag
+            return outbound
     raise ValueError(f"unsupported runtime proxy kind: {kind!r}")
 
 

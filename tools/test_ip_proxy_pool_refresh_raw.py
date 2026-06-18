@@ -187,6 +187,71 @@ def test_runtime_config_routes_direct_proxy_candidates_without_turn_wrapper():
     assert "streamSettings" not in socks_out
 
 
+def test_runtime_config_routes_checked_subscription_candidates():
+    from ip_proxy_pool_refresh import normalize_row, xray_config
+
+    rows = [
+        normalize_row(
+            {
+                "kind": "vless",
+                "raw": "vless://2523c510-9ff0-415b-9582-93949bfae7e3@vless.example.test:443?type=ws&security=tls&path=/ws&host=vless.example.test&sni=vless.example.test&encryption=none",
+                "success": True,
+                "registration_tier": "dirty_alive_noncn",
+                "dirty": ["is_suspicious"],
+                "exit_ip": "198.51.100.21",
+                "country": "SG",
+                "raw_pool": True,
+            },
+            19082,
+            "worker.example.test",
+            "2523c510-9ff0-415b-9582-93949bfae7e3",
+            "raw_latest",
+        ),
+        normalize_row(
+            {
+                "kind": "trojan",
+                "raw": "trojan://secret@trojan.example.test:443?type=tcp&sni=trojan.example.test",
+                "success": True,
+                "registration_tier": "dirty_alive_noncn",
+                "dirty": ["is_suspicious"],
+                "exit_ip": "198.51.100.22",
+                "country": "NL",
+                "raw_pool": True,
+            },
+            19083,
+            "worker.example.test",
+            "2523c510-9ff0-415b-9582-93949bfae7e3",
+            "raw_latest",
+        ),
+        normalize_row(
+            {
+                "kind": "ss",
+                "raw": "ss://YWVzLTEyOC1nY206cGFzcw@ss.example.test:8388",
+                "success": True,
+                "registration_tier": "dirty_alive_noncn",
+                "dirty": ["is_suspicious"],
+                "exit_ip": "198.51.100.23",
+                "country": "US",
+                "raw_pool": True,
+            },
+            19084,
+            "worker.example.test",
+            "2523c510-9ff0-415b-9582-93949bfae7e3",
+            "raw_latest",
+        ),
+    ]
+
+    config = xray_config(rows, "2523c510-9ff0-415b-9582-93949bfae7e3", "worker.example.test")
+    outbounds = {item["tag"]: item for item in config["outbounds"]}
+
+    assert outbounds["out-19082"]["protocol"] == "vless"
+    assert outbounds["out-19082"]["settings"]["vnext"][0]["address"] == "vless.example.test"
+    assert outbounds["out-19083"]["protocol"] == "trojan"
+    assert outbounds["out-19083"]["settings"]["servers"][0]["address"] == "trojan.example.test"
+    assert outbounds["out-19084"]["protocol"] == "shadowsocks"
+    assert outbounds["out-19084"]["settings"]["servers"][0]["method"] == "aes-128-gcm"
+
+
 def test_classify_latest_accepts_checked_direct_proxy_runtime_candidates(tmp_path):
     input_path = tmp_path / "runtime/research/proxy_candidate_check_raw.json"
     rows = [
@@ -217,6 +282,15 @@ def test_classify_latest_accepts_checked_direct_proxy_runtime_candidates(tmp_pat
             "exit_ip": "198.51.100.12",
             "country": "JP",
         },
+        {
+            "kind": "vless",
+            "raw": "vless://2523c510-9ff0-415b-9582-93949bfae7e3@vless.example.test:443?type=ws&security=tls&path=/ws&host=vless.example.test&sni=vless.example.test&encryption=none",
+            "success": True,
+            "clean": False,
+            "dirty": ["is_suspicious"],
+            "exit_ip": "198.51.100.13",
+            "country": "SG",
+        },
     ]
     write_json(input_path, rows)
 
@@ -246,7 +320,7 @@ def test_classify_latest_accepts_checked_direct_proxy_runtime_candidates(tmp_pat
     resin_dir = tmp_path / "runtime/resin"
     assert json.loads((resin_dir / "clean_candidates_classified.latest.json").read_text(encoding="utf-8"))[0]["kind"] == "http"
     assert len(json.loads((resin_dir / "relaxed_candidates_classified.latest.json").read_text(encoding="utf-8"))) == 2
-    assert len(json.loads((resin_dir / "all_candidates_classified.latest.json").read_text(encoding="utf-8"))) == 3
+    assert len(json.loads((resin_dir / "all_candidates_classified.latest.json").read_text(encoding="utf-8"))) == 4
 
 
 def test_refill_once_exposes_raw_pool_mode():

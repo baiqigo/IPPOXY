@@ -339,6 +339,12 @@ def main():
     parser.add_argument('--base-port', type=int, default=BASE_PORT)
     parser.add_argument('--container', default=DEFAULT_CONTAINER_NAME)
     parser.add_argument('--keep-container', action='store_true')
+    parser.add_argument('--start-index', type=int, default=0,
+                        help='skip this many parsed candidates before checking')
+    parser.add_argument('--max-candidates', type=int, default=0,
+                        help='maximum parsed candidates to check after --start-index; 0 means all')
+    parser.add_argument('--stop-after-success', type=int, default=0,
+                        help='stop once this many live candidates are found; 0 disables early stop')
     args = parser.parse_args()
 
     run_id = args.run_id or time.strftime('stage0_%Y%m%d_%H%M%S')
@@ -378,11 +384,27 @@ def main():
     if not parsed:
         print('No parseable candidates', file=sys.stderr)
         return 1
+    original_parsed_count = len(parsed)
+    start_index = max(0, int(args.start_index or 0))
+    if start_index:
+        parsed = parsed[start_index:]
+    if args.max_candidates and args.max_candidates > 0:
+        parsed = parsed[:args.max_candidates]
+    if len(parsed) != original_parsed_count:
+        print(
+            f'Checking window: start_index={start_index}, '
+            f'max_candidates={args.max_candidates}, selected={len(parsed)}/{original_parsed_count}'
+        )
+    if not parsed:
+        print('No candidates selected after windowing', file=sys.stderr)
+        return 1
 
     all_results = []
     total_batches = (len(parsed) + args.batch_size - 1) // args.batch_size
     config_dir = RUNTIME / 'stage0_xray_configs'
     config_dir.mkdir(parents=True, exist_ok=True)
+    success_count = 0
+    stop_requested = False
 
     for batch_idx in range(total_batches):
         start = batch_idx * args.batch_size
@@ -442,11 +464,19 @@ def main():
                 'source': c.get('source', ''), 'source_project': c.get('source_project', ''),
                 'source_url': c.get('source_url', ''), 'dedup_key': c.get('dedup_key', ''),
                 'format': c.get('format', '')})
+            if ip_info is not None:
+                success_count += 1
             ch = '.' if tier == 'clean' else ('~' if tier == 'risky' else 'x')
             sys.stdout.write(ch)
             sys.stdout.flush()
+            if args.stop_after_success and success_count >= args.stop_after_success:
+                stop_requested = True
+                break
 
         print()
+        if stop_requested:
+            print(f'Reached stop-after-success={args.stop_after_success}; stopping after {len(all_results)} tested')
+            break
         if not args.keep_container and batch_idx < total_batches - 1:
             docker_stop(args.container)
 

@@ -17,7 +17,17 @@ CHECK_JSON = IP_RUNTIME_DIR / "research/proxy_candidate_check.latest.json"
 RESIN_DIR = IP_RUNTIME_DIR / "resin"
 RISKY_DIRTY_FLAGS = {"is_datacenter", "is_proxy", "is_vpn"}
 HARD_DIRTY_FLAGS = {"is_tor", "is_abuser", "is_bogon"}
-RUNTIME_CANDIDATE_KINDS = {"turn", "http", "https", "socks4", "socks5"}
+RUNTIME_CANDIDATE_KINDS = {
+    "turn",
+    "http",
+    "https",
+    "socks4",
+    "socks5",
+    "vless",
+    "vmess",
+    "trojan",
+    "ss",
+}
 
 
 def env_bool(name: str, default: bool = False) -> bool:

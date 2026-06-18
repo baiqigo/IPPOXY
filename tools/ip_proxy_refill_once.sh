@@ -133,7 +133,7 @@ strict=root/"clean_candidates_classified.latest.json"
 relaxed=root/"relaxed_candidates_classified.latest.json"
 raw=root/"all_candidates_classified.latest.json"
 min_clean=int(os.environ.get("IP_PROXY_MIN_CLEAN", "12"))
-runtime_kinds={"turn", "http", "https", "socks4", "socks5"}
+runtime_kinds={"turn", "http", "https", "socks4", "socks5", "vless", "vmess", "trojan", "ss"}
 def runtime_count(path, tiers):
     if not path.exists():
         return 0
