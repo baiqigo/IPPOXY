@@ -65,6 +65,18 @@
       "url": "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",
       "kind": "http",
       "type": "ip_port"
+    },
+    {
+      "name": "vakhov_http",
+      "url": "https://vakhov.github.io/fresh-proxy-list/http.txt",
+      "kind": "http",
+      "type": "ip_port"
+    },
+    {
+      "name": "argh94_http",
+      "url": "https://raw.githubusercontent.com/Argh94/Proxy-List/main/HTTP.txt",
+      "kind": "http",
+      "type": "ip_port"
     }
   ],
   "socks_sources": [
@@ -97,9 +109,64 @@
       "url": "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt",
       "kind": "socks5",
       "type": "ip_port"
+    },
+    {
+      "name": "vakhov_socks4",
+      "url": "https://vakhov.github.io/fresh-proxy-list/socks4.txt",
+      "kind": "socks4",
+      "type": "ip_port"
+    },
+    {
+      "name": "vakhov_socks5",
+      "url": "https://vakhov.github.io/fresh-proxy-list/socks5.txt",
+      "kind": "socks5",
+      "type": "ip_port"
+    },
+    {
+      "name": "argh94_socks4",
+      "url": "https://raw.githubusercontent.com/Argh94/Proxy-List/main/SOCKS4.txt",
+      "kind": "socks4",
+      "type": "ip_port"
+    },
+    {
+      "name": "argh94_socks5",
+      "url": "https://raw.githubusercontent.com/Argh94/Proxy-List/main/SOCKS5.txt",
+      "kind": "socks5",
+      "type": "ip_port"
+    },
+    {
+      "name": "kort0881_proxy_all",
+      "url": "https://raw.githubusercontent.com/kort0881/telegram-proxy-collector/main/proxy_all.txt",
+      "kind": "socks5",
+      "type": "ip_port"
     }
   ],
   "subscription_sources": [
+    {
+      "name": "barryfar_all",
+      "url": "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/All_Configs_Sub.txt",
+      "type": "share_url"
+    },
+    {
+      "name": "barryfar_all_base64",
+      "url": "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/All_Configs_base64_Sub.txt",
+      "type": "base64_subscription"
+    },
+    {
+      "name": "openray_all_valid",
+      "url": "https://raw.githubusercontent.com/sakha1370/OpenRay/main/output/all_valid_proxies.txt",
+      "type": "share_url"
+    },
+    {
+      "name": "v2go_all",
+      "url": "https://raw.githubusercontent.com/Danialsamadi/v2go/main/AllConfigsSub.txt",
+      "type": "share_url"
+    },
+    {
+      "name": "argh94_all_config",
+      "url": "https://raw.githubusercontent.com/Argh94/Proxy-List/main/All_Config.txt",
+      "type": "share_url"
+    },
     {
       "name": "ebrasha_all",
       "url": "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/V2Ray-Config-By-EbraSha-All-Type.txt",
