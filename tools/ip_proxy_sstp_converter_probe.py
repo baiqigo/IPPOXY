@@ -213,7 +213,9 @@ def write_probe_artifacts(plan: dict, artifact_dir: Path) -> dict:
     launch = artifact_dir / "launch.example.sh"
     plan_path = artifact_dir / "plan.json"
     entrypoint.write_text(entrypoint_script(), encoding="utf-8")
+    entrypoint.chmod(0o755)
     launch.write_text(launch_example(plan), encoding="utf-8")
+    launch.chmod(0o755)
     plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return {
         "entrypoint": str(entrypoint),

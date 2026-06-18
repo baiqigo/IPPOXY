@@ -53,9 +53,11 @@ def test_converter_artifact_writer_outputs_entrypoint_and_masked_plan(tmp_path):
     written = write_probe_artifacts(plan, tmp_path / "probe")
 
     assert Path(written["entrypoint"]).read_text(encoding="utf-8").startswith("#!/usr/bin/env bash")
+    assert Path(written["entrypoint"]).stat().st_mode & 0o111
     assert "SSTP_PASSWORD" in Path(written["entrypoint"]).read_text(encoding="utf-8")
     plan_text = Path(written["plan"]).read_text(encoding="utf-8")
     assert "sstp://vpn:***@public-vpn-210.opengw.net:443" in plan_text
+    assert Path(written["launch_example"]).stat().st_mode & 0o111
     assert "SSTP_PASSWORD=<redacted>" in Path(written["launch_example"]).read_text(encoding="utf-8")
 
 
