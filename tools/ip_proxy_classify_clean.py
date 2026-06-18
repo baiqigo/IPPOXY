@@ -17,6 +17,7 @@ CHECK_JSON = IP_RUNTIME_DIR / "research/proxy_candidate_check.latest.json"
 RESIN_DIR = IP_RUNTIME_DIR / "resin"
 RISKY_DIRTY_FLAGS = {"is_datacenter", "is_proxy", "is_vpn"}
 HARD_DIRTY_FLAGS = {"is_tor", "is_abuser", "is_bogon"}
+RUNTIME_CANDIDATE_KINDS = {"turn", "http", "https", "socks4", "socks5"}
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -84,6 +85,19 @@ def turn_candidate_count(rows: list[dict], tiers: set[str] | None = None) -> int
     return total
 
 
+def runtime_candidate_count(rows: list[dict], tiers: set[str] | None = None) -> int:
+    total = 0
+    for item in rows:
+        if item.get("kind") not in RUNTIME_CANDIDATE_KINDS:
+            continue
+        if not item.get("raw") or not item.get("exit_ip"):
+            continue
+        if tiers is not None and str(item.get("registration_tier") or "").lower() not in tiers:
+            continue
+        total += 1
+    return total
+
+
 def latest_update_guard(
     *,
     clean: list[dict],
@@ -98,6 +112,9 @@ def latest_update_guard(
         "clean_turn": turn_candidate_count(clean, {"clean"}),
         "relaxed_turn": turn_candidate_count(relaxed, {"clean", "risky"}),
         "all_turn": turn_candidate_count(candidate_rows),
+        "clean_runtime": runtime_candidate_count(clean, {"clean"}),
+        "relaxed_runtime": runtime_candidate_count(relaxed, {"clean", "risky"}),
+        "all_runtime": runtime_candidate_count(candidate_rows),
     }
     thresholds = {
         "min_clean_turn": max(0, int(min_clean_turn)),
@@ -106,9 +123,9 @@ def latest_update_guard(
     }
     failures = []
     for count_key, threshold_key in (
-        ("clean_turn", "min_clean_turn"),
-        ("relaxed_turn", "min_relaxed_turn"),
-        ("all_turn", "min_all_turn"),
+        ("clean_runtime", "min_clean_turn"),
+        ("relaxed_runtime", "min_relaxed_turn"),
+        ("all_runtime", "min_all_turn"),
     ):
         if counts[count_key] < thresholds[threshold_key]:
             failures.append(

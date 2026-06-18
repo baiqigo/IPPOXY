@@ -294,7 +294,12 @@ def alias_urls(base_url: str, args: argparse.Namespace) -> dict[str, str]:
     return {endpoint: f"{base}{alias_path(endpoint, args)}" for endpoint in ENDPOINT_PATHS}
 
 
+def vless_export_rows(rows: list[dict]) -> list[dict]:
+    return [row for row in rows if row.get("kind") == "turn" and row.get("vless")]
+
+
 def render_clash(rows: list[dict], worker_host: str, uuid: str) -> str:
+    rows = vless_export_rows(rows)
     names = unique_names(rows)
     lines = [
         "mixed-port: 7890",
@@ -360,6 +365,7 @@ def render_clash(rows: list[dict], worker_host: str, uuid: str) -> str:
 
 
 def render_vless(rows: list[dict]) -> str:
+    rows = vless_export_rows(rows)
     return "\n".join(f"{row['vless']}#{url_fragment(name)}" for row, name in zip(rows, unique_names(rows), strict=True)) + "\n"
 
 
@@ -451,6 +457,7 @@ def load_selected_rows(args: argparse.Namespace) -> tuple[list[dict], dict]:
         source_quality,
         args.max_fallback_candidate_age_hours,
         args.allow_stale_fallback_candidates,
+        args.pool_mode,
     )
     if len(candidates) < args.min_clean:
         raise SystemExit(
@@ -519,6 +526,7 @@ def load_selected_rows(args: argparse.Namespace) -> tuple[list[dict], dict]:
         "registrar_bad_exit_ips": sorted(registrar_failed),
         "fallback_reason": fallback_reason,
         "candidate_input_audit": candidate_input_audit,
+        "pool_mode": args.pool_mode,
         "max_fallback_candidate_age_hours": args.max_fallback_candidate_age_hours,
         "allow_stale_fallback_candidates": args.allow_stale_fallback_candidates,
         "requested_limit": args.limit,
@@ -725,7 +733,7 @@ def main() -> int:
     parser.add_argument("--public-dir", type=Path, default=DEFAULT_PUBLIC_DIR)
     parser.add_argument("--skip-public-dir", action="store_true")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    parser.add_argument("--input", type=Path, default=pool.DEFAULT_INPUT)
+    parser.add_argument("--input", type=Path, default=None)
     parser.add_argument("--baseline", type=Path, default=pool.RUNTIME / "turn_xray_pool_20260608.json")
     parser.add_argument("--verify", type=Path, default=pool.DEFAULT_VERIFY)
     parser.add_argument("--registrar-feedback", type=Path, default=pool.DEFAULT_REGISTRAR_FEEDBACK)
@@ -734,6 +742,12 @@ def main() -> int:
     parser.add_argument("--uuid", default=pool.DEFAULT_UUID)
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     parser.add_argument("--min-clean", type=int, default=int(os.environ.get("IP_PROXY_MIN_CLEAN", "12")))
+    parser.add_argument(
+        "--pool-mode",
+        choices=sorted(pool.ALLOWED_POOL_MODES),
+        default=os.environ.get("IP_PROXY_POOL_MODE", "strict"),
+        help="strict exports clean TURN candidates; relaxed also admits risky non-hard-dirty TURN candidates.",
+    )
     parser.add_argument(
         "--max-fallback-candidate-age-hours",
         type=float,
@@ -768,6 +782,8 @@ def main() -> int:
         default=os.environ.get("IP_PROXY_ALLOW_RETAIN_BAD_EXITS", "0").strip().lower() in ("1", "true", "yes", "on"),
     )
     args = parser.parse_args()
+    if args.input is None:
+        args.input = pool.default_input_for_pool_mode(args.pool_mode)
 
     rows, selection_meta = load_selected_rows(args)
     meta = write_outputs(rows, selection_meta, args)

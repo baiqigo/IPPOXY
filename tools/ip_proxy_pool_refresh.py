@@ -24,6 +24,7 @@ RUNTIME_RESIN_DIR = RUNTIME / "resin"
 
 DEFAULT_STRICT_INPUT = RUNTIME_RESIN_DIR / "clean_candidates_classified.latest.json"
 DEFAULT_RELAXED_INPUT = RUNTIME_RESIN_DIR / "relaxed_candidates_classified.latest.json"
+DEFAULT_RAW_INPUT = RUNTIME_RESIN_DIR / "all_candidates_classified.latest.json"
 DEFAULT_INPUT = DEFAULT_STRICT_INPUT
 DEFAULT_BASELINE = DOC_RUNTIME_DIR / "turn_xray_pool_20260608.json"
 DEFAULT_VERIFY = ROOT / "captures/ip_runtime_verify_latest.json"
@@ -32,7 +33,8 @@ DEFAULT_SOURCE_QUALITY = RUNTIME / "research/proxy_source_quality_latest.json"
 DEFAULT_WORKER_HOST = os.environ.get("IP_PROXY_TURN_WORKER_HOST", "ip-proxy-turn-poc.yanielachilles90-mhnxbt5n94.workers.dev")
 DEFAULT_UUID = "2523c510-9ff0-415b-9582-93949bfae7e3"
 DEFAULT_MAX_FALLBACK_CANDIDATE_AGE_HOURS = float(os.environ.get("IP_PROXY_MAX_FALLBACK_CANDIDATE_AGE_HOURS", "48"))
-ALLOWED_POOL_MODES = {"strict", "relaxed"}
+ALLOWED_POOL_MODES = {"strict", "relaxed", "raw"}
+RUNTIME_CANDIDATE_KINDS = {"turn", "http", "https", "socks4", "socks5"}
 RISKY_DIRTY_FLAGS = {"is_datacenter", "is_proxy", "is_vpn"}
 HARD_DIRTY_FLAGS = {"is_tor", "is_abuser", "is_bogon"}
 DEFAULT_MAX_RISKY_CANDIDATES = int(os.environ.get("IP_PROXY_MAX_RISKY_CANDIDATES", "10"))
@@ -43,6 +45,18 @@ DEFAULT_MAX_COUNTRY_RATIO = float(os.environ.get("IP_PROXY_MAX_COUNTRY_RATIO", "
 DEFAULT_MAX_COMPANY_RATIO = float(os.environ.get("IP_PROXY_MAX_COMPANY_RATIO", "0.24") or "0")
 DEFAULT_MAX_ASN_RATIO = float(os.environ.get("IP_PROXY_MAX_ASN_RATIO", "0.24") or "0")
 RELAXED_QUANTITY_DEFAULTS = {
+    "limit": (80, "--limit", "IP_PROXY_POOL_SIZE"),
+    "min_clean": (1, "--min-clean", "IP_PROXY_MIN_CLEAN"),
+    "min_new_candidates": (55, "--min-new-candidates", "IP_PROXY_MIN_NEW_CANDIDATES"),
+    "max_risky_candidates": (-1, "--max-risky-candidates", "IP_PROXY_MAX_RISKY_CANDIDATES"),
+    "max_risky_ratio": (0.0, "--max-risky-ratio", "IP_PROXY_MAX_RISKY_RATIO"),
+    "min_strict_clean_selected": (0, "--min-strict-clean-selected", "IP_PROXY_MIN_STRICT_CLEAN_SELECTED"),
+    "min_countries": (0, "--min-countries", "IP_PROXY_MIN_COUNTRIES"),
+    "max_country_ratio": (0.0, "--max-country-ratio", "IP_PROXY_MAX_COUNTRY_RATIO"),
+    "max_company_ratio": (0.0, "--max-company-ratio", "IP_PROXY_MAX_COMPANY_RATIO"),
+    "max_asn_ratio": (0.0, "--max-asn-ratio", "IP_PROXY_MAX_ASN_RATIO"),
+}
+RAW_QUANTITY_DEFAULTS = {
     "limit": (80, "--limit", "IP_PROXY_POOL_SIZE"),
     "min_clean": (1, "--min-clean", "IP_PROXY_MIN_CLEAN"),
     "min_new_candidates": (55, "--min-new-candidates", "IP_PROXY_MIN_NEW_CANDIDATES"),
@@ -89,7 +103,10 @@ def pool_priority(item: dict) -> int:
 
 def make_tag(item: dict) -> str:
     tier = str(item.get("registration_tier") or "").lower()
-    bucket = "relaxed" if tier == "risky" or bool(item.get("relaxed_pool")) else classify(item)
+    if bool(item.get("raw_pool")) or tier == "dirty_alive_noncn":
+        bucket = "raw"
+    else:
+        bucket = "relaxed" if tier == "risky" or bool(item.get("relaxed_pool")) else classify(item)
     country = slug(item.get("country") or "xx")
     company = slug(item.get("company") or item.get("exit_ip") or "node")
     city = slug(item.get("city") or "")
@@ -112,6 +129,62 @@ def vless_url(uuid: str, worker_host: str, turn_url: str) -> str:
     return f"vless://{uuid}@{worker_host}:443/?" + urllib.parse.urlencode(query, safe="/:")
 
 
+def parse_proxy_url(raw: str, kind: str) -> dict:
+    value = str(raw or "").strip()
+    if "://" not in value:
+        value = f"{kind}://{value}"
+    parsed = urllib.parse.urlparse(value)
+    host = parsed.hostname
+    port = parsed.port
+    if not host or not port:
+        raise ValueError(f"invalid proxy URL: {raw!r}")
+    server: dict[str, object] = {"address": host, "port": int(port)}
+    if parsed.username is not None:
+        user = urllib.parse.unquote(parsed.username)
+        password = urllib.parse.unquote(parsed.password or "")
+        server["users"] = [{"user": user, "pass": password}]
+    return server
+
+
+def outbound_for_row(row: dict, uuid: str, worker_host: str, outbound_tag: str) -> dict:
+    kind = str(row.get("kind") or "turn").lower()
+    raw = str(row.get("raw") or row.get("turn") or "")
+    if kind == "turn":
+        turn_path = f"/{raw}?ed=2560"
+        return {
+            "tag": outbound_tag,
+            "protocol": "vless",
+            "settings": {
+                "vnext": [
+                    {
+                        "address": worker_host,
+                        "port": 443,
+                        "users": [{"id": uuid, "encryption": "none"}],
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "ws",
+                "security": "tls",
+                "tlsSettings": {"serverName": worker_host},
+                "wsSettings": {"path": turn_path, "headers": {"Host": worker_host}},
+            },
+        }
+    if kind in {"http", "https"}:
+        return {
+            "tag": outbound_tag,
+            "protocol": "http",
+            "settings": {"servers": [parse_proxy_url(raw, kind)]},
+        }
+    if kind in {"socks4", "socks5"}:
+        return {
+            "tag": outbound_tag,
+            "protocol": "socks",
+            "settings": {"servers": [parse_proxy_url(raw, kind)]},
+        }
+    raise ValueError(f"unsupported runtime proxy kind: {kind!r}")
+
+
 def xray_config(rows: list[dict], uuid: str, worker_host: str) -> dict:
     inbounds = []
     outbounds = []
@@ -120,7 +193,6 @@ def xray_config(rows: list[dict], uuid: str, worker_host: str) -> dict:
         port = int(row["local_port"])
         inbound_tag = f"in-{port}"
         outbound_tag = f"out-{port}"
-        turn_path = f"/{row['turn']}?ed=2560"
         inbounds.append(
             {
                 "tag": inbound_tag,
@@ -131,27 +203,7 @@ def xray_config(rows: list[dict], uuid: str, worker_host: str) -> dict:
                 "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
             }
         )
-        outbounds.append(
-            {
-                "tag": outbound_tag,
-                "protocol": "vless",
-                "settings": {
-                    "vnext": [
-                        {
-                            "address": worker_host,
-                            "port": 443,
-                            "users": [{"id": uuid, "encryption": "none"}],
-                        }
-                    ]
-                },
-                "streamSettings": {
-                    "network": "ws",
-                    "security": "tls",
-                    "tlsSettings": {"serverName": worker_host},
-                    "wsSettings": {"path": turn_path, "headers": {"Host": worker_host}},
-                },
-            }
-        )
+        outbounds.append(outbound_for_row(row, uuid, worker_host, outbound_tag))
         rules.append({"type": "field", "inboundTag": [inbound_tag], "outboundTag": outbound_tag})
     return {
         "log": {"loglevel": "warning"},
@@ -193,9 +245,13 @@ def cli_flag_present(flag: str, argv: list[str] | None = None) -> bool:
 
 
 def apply_pool_mode_defaults(args: argparse.Namespace) -> None:
-    if args.pool_mode != "relaxed":
+    defaults = {
+        "relaxed": RELAXED_QUANTITY_DEFAULTS,
+        "raw": RAW_QUANTITY_DEFAULTS,
+    }.get(args.pool_mode)
+    if defaults is None:
         return
-    for attr, (value, flag, env_name) in RELAXED_QUANTITY_DEFAULTS.items():
+    for attr, (value, flag, env_name) in defaults.items():
         if cli_flag_present(flag) or env_name in os.environ:
             continue
         if attr == "min_new_candidates":
@@ -266,17 +322,32 @@ def asn_key(item: dict) -> str:
 def candidate_tier(item: dict) -> str:
     if not item.get("success"):
         return "dirty"
+    tier = str(item.get("registration_tier") or "").strip().lower()
+    if tier in {"dirty"}:
+        return tier
     dirty = dirty_flags(item)
     if dirty & HARD_DIRTY_FLAGS:
         return "dirty"
+    country = (item.get("country") or "").upper()
+    if country == "CN":
+        return "dirty"
     if dirty:
-        return "risky" if dirty <= RISKY_DIRTY_FLAGS else "dirty"
-    tier = str(item.get("registration_tier") or "").strip().lower()
-    if tier in {"clean", "risky", "dirty"}:
+        return "risky" if dirty <= RISKY_DIRTY_FLAGS else "dirty_alive_noncn"
+    if tier in {"clean", "risky", "dirty_alive_noncn"}:
         return tier
     if item.get("clean") and item.get("success"):
         return "clean"
     return "clean"
+
+
+def pool_mode_tiers(pool_mode: str) -> set[str]:
+    if pool_mode == "strict":
+        return {"clean"}
+    if pool_mode == "relaxed":
+        return {"clean", "risky"}
+    if pool_mode == "raw":
+        return {"clean", "risky", "dirty_alive_noncn"}
+    raise ValueError(f"invalid pool_mode={pool_mode!r}")
 
 
 def turn_candidates(path: Path, pool_mode: str = "strict") -> list[dict]:
@@ -286,22 +357,22 @@ def turn_candidates(path: Path, pool_mode: str = "strict") -> list[dict]:
     if not isinstance(data, list):
         return []
     out = []
+    allowed_tiers = pool_mode_tiers(pool_mode)
     for item in data:
         if not isinstance(item, dict):
             continue
-        if item.get("kind") != "turn" or not item.get("success"):
+        if item.get("kind") not in RUNTIME_CANDIDATE_KINDS or not item.get("success"):
             continue
         if not item.get("raw") or not item.get("exit_ip"):
             continue
         tier = candidate_tier(item)
-        if tier == "dirty":
-            continue
-        if pool_mode == "strict" and tier != "clean":
+        if tier not in allowed_tiers:
             continue
         row = dict(item)
         row["registration_tier"] = tier
         row["registration_eligible"] = True
         row["relaxed_pool"] = pool_mode == "relaxed"
+        row["raw_pool"] = pool_mode == "raw"
         out.append(row)
     out.sort(key=lambda item: (pool_priority(item), item.get("responseTime") or 999999, item.get("raw") or ""))
     return out
@@ -342,7 +413,15 @@ def clean_turn_candidates(path: Path) -> list[dict]:
 
 
 def default_input_for_pool_mode(pool_mode: str) -> Path:
+    if pool_mode == "raw":
+        return DEFAULT_RAW_INPUT
     return DEFAULT_RELAXED_INPUT if pool_mode == "relaxed" else DEFAULT_STRICT_INPUT
+
+
+def candidate_file_prefix_for_pool_mode(pool_mode: str) -> str:
+    if pool_mode == "raw":
+        return "all"
+    return "relaxed" if pool_mode == "relaxed" else "clean"
 
 
 def file_age_hours(path: Path, now: float | None = None) -> float | None:
@@ -598,8 +677,8 @@ def resolve_candidate_input(
 
     fallback_files = sorted(
         [
-            *RUNTIME_RESIN_DIR.glob(f"{'relaxed' if pool_mode == 'relaxed' else 'clean'}_candidates_classified*.json"),
-            *RESIN_DIR.glob(f"{'relaxed' if pool_mode == 'relaxed' else 'clean'}_candidates_classified*.json"),
+            *RUNTIME_RESIN_DIR.glob(f"{candidate_file_prefix_for_pool_mode(pool_mode)}_candidates_classified*.json"),
+            *RESIN_DIR.glob(f"{candidate_file_prefix_for_pool_mode(pool_mode)}_candidates_classified*.json"),
         ],
         key=lambda item: item.stat().st_mtime,
         reverse=True,
@@ -740,11 +819,15 @@ def registrar_failed_exit_ips(feedback_path: Path) -> set[str]:
 
 def normalize_row(item: dict, port: int, worker_host: str, uuid: str, source: str) -> dict:
     raw = item.get("turn") or item.get("raw")
+    kind = str(item.get("kind") or "turn").lower()
     row = dict(item)
     row["raw"] = raw
-    row["turn"] = raw
+    if kind == "turn":
+        row["turn"] = raw
+    elif "turn" in row:
+        row.pop("turn", None)
     row["local_port"] = port
-    row["kind"] = "turn"
+    row["kind"] = kind
     row["success"] = True
     row["source"] = source
     row["selection_source"] = source
@@ -752,13 +835,15 @@ def normalize_row(item: dict, port: int, worker_host: str, uuid: str, source: st
     tier = candidate_tier(row)
     row["registration_tier"] = tier
     row["clean"] = tier == "clean"
-    row["registration_eligible"] = row["registration_tier"] in {"clean", "risky"}
+    row["registration_eligible"] = row["registration_tier"] in {"clean", "risky", "dirty_alive_noncn"}
     row["relaxed_pool"] = row.get("registration_tier") == "risky" or bool(item.get("relaxed_pool"))
+    row["raw_pool"] = bool(item.get("raw_pool"))
     row["pool_class"] = classify(row)
     row["pool_priority"] = pool_priority(row)
     row["tag"] = row.get("tag") or make_tag(row)
-    row["worker_path"] = f"/{raw}?ed=2560"
-    row["vless"] = vless_url(uuid, worker_host, raw)
+    if kind == "turn":
+        row["worker_path"] = f"/{raw}?ed=2560"
+        row["vless"] = vless_url(uuid, worker_host, raw)
     return row
 
 
@@ -912,7 +997,7 @@ def write_runtime(rows: list[dict], worker_host: str, uuid: str, write_docs: boo
     before = {name: file_sha(path) for name, path in files.items()}
 
     local_lines = [f"socks5://127.0.0.1:{row['local_port']}#{row['tag']}" for row in rows]
-    vless_lines = [f"{row['vless']}#{row['tag']}" for row in rows]
+    vless_lines = [f"{row['vless']}#{row['tag']}" for row in rows if row.get("vless")]
     payloads = {
         "mapping": json.dumps(rows, ensure_ascii=False, indent=2) + "\n",
         "xray": json.dumps(xray_config(rows, uuid, worker_host), ensure_ascii=False, indent=2) + "\n",
@@ -1095,7 +1180,7 @@ def main() -> int:
         args.worker_host,
         args.uuid,
         args.min_new_candidates,
-        max(0, args.limit - args.min_new_candidates) if args.pool_mode == "relaxed" else 0,
+        max(0, args.limit - args.min_new_candidates) if args.pool_mode in {"relaxed", "raw"} else 0,
     )
     if len(rows) < args.limit:
         raise SystemExit(f"only selected {len(rows)} rows, need {args.limit}")

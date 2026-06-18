@@ -131,23 +131,33 @@ if [[ "$IP_PROXY_POOL_MODE" == "auto" ]]; then
 root=Path(".runtime/ip-proxy/resin")
 strict=root/"clean_candidates_classified.latest.json"
 relaxed=root/"relaxed_candidates_classified.latest.json"
+raw=root/"all_candidates_classified.latest.json"
 min_clean=int(os.environ.get("IP_PROXY_MIN_CLEAN", "12"))
-def turn_count(path, tiers):
+runtime_kinds={"turn", "http", "https", "socks4", "socks5"}
+def runtime_count(path, tiers):
     if not path.exists():
         return 0
     rows=json.loads(path.read_text(encoding="utf-8-sig"))
-    return sum(1 for r in rows if isinstance(r, dict) and r.get("kind")=="turn" and r.get("success") and r.get("raw") and r.get("exit_ip") and str(r.get("registration_tier") or "").lower() in tiers)
-strict_count=turn_count(strict, {"clean"})
-relaxed_count=turn_count(relaxed, {"clean","risky"})
-print("relaxed" if strict_count < min_clean <= relaxed_count else "strict")')"
+    return sum(1 for r in rows if isinstance(r, dict) and r.get("kind") in runtime_kinds and r.get("success") and r.get("raw") and r.get("exit_ip") and str(r.get("registration_tier") or "").lower() in tiers)
+strict_count=runtime_count(strict, {"clean"})
+relaxed_count=runtime_count(relaxed, {"clean","risky"})
+raw_count=runtime_count(raw, {"clean","risky","dirty_alive_noncn"})
+if strict_count >= min_clean:
+    print("strict")
+elif relaxed_count >= min_clean:
+    print("relaxed")
+elif raw_count >= min_clean:
+    print("raw")
+else:
+    print("strict")')"
 else
   POOL_MODE="$IP_PROXY_POOL_MODE"
 fi
-if [[ "$POOL_MODE" != "strict" && "$POOL_MODE" != "relaxed" ]]; then
+if [[ "$POOL_MODE" != "strict" && "$POOL_MODE" != "relaxed" && "$POOL_MODE" != "raw" ]]; then
   echo "{\"status\":\"error\",\"reason\":\"invalid_IP_PROXY_POOL_MODE\",\"value\":\"$IP_PROXY_POOL_MODE\"}"
   exit 2
 fi
-if [[ "$POOL_MODE" == "relaxed" ]]; then
+if [[ "$POOL_MODE" == "relaxed" || "$POOL_MODE" == "raw" ]]; then
   [[ -z "$IP_PROXY_POOL_SIZE_WAS_SET" ]] && IP_PROXY_POOL_SIZE="80"
   [[ -z "$IP_PROXY_MIN_CLEAN_WAS_SET" ]] && IP_PROXY_MIN_CLEAN="1"
   [[ -z "$IP_PROXY_MIN_NEW_CANDIDATES_WAS_SET" ]] && IP_PROXY_MIN_NEW_CANDIDATES="55"
@@ -163,6 +173,8 @@ fi
 POOL_REFRESH_INPUT=".runtime/ip-proxy/resin/clean_candidates_classified.latest.json"
 if [[ "$POOL_MODE" == "relaxed" ]]; then
   POOL_REFRESH_INPUT=".runtime/ip-proxy/resin/relaxed_candidates_classified.latest.json"
+elif [[ "$POOL_MODE" == "raw" ]]; then
+  POOL_REFRESH_INPUT=".runtime/ip-proxy/resin/all_candidates_classified.latest.json"
 fi
 POOL_REFRESH_ARGS=(
   --input "$POOL_REFRESH_INPUT"
