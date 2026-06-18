@@ -126,7 +126,7 @@ log() {
 
 cleanup() {
   pkill sstpc >/dev/null 2>&1 || true
-  pkill danted >/dev/null 2>&1 || true
+  pkill microsocks >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -139,27 +139,8 @@ export DEBIAN_FRONTEND=noninteractive
 log "installing packages"
 apt-get update >>/work/probe.log 2>&1
 apt-get install -y --no-install-recommends \\
-  ca-certificates curl dante-server iproute2 ppp procps sstp-client \\
+  ca-certificates curl iproute2 microsocks ppp procps sstp-client \\
   >>/work/probe.log 2>&1
-
-cat >/etc/danted.conf <<'CONF'
-logoutput: stderr
-internal: 0.0.0.0 port = 1080
-external: ppp0
-socksmethod: none
-clientmethod: none
-user.privileged: root
-user.unprivileged: nobody
-client pass {
-  from: 0.0.0.0/0 to: 0.0.0.0/0
-  log: connect disconnect error
-}
-socks pass {
-  from: 0.0.0.0/0 to: 0.0.0.0/0
-  command: bind connect udpassociate
-  log: connect disconnect error
-}
-CONF
 
 log "starting sstpc"
 sstpc --log-stderr --cert-warn \\
@@ -181,8 +162,8 @@ ip addr show ppp0 >>/work/probe.log 2>&1 || {
   exit 20
 }
 
-log "starting danted"
-danted -f /etc/danted.conf -D >>/work/probe.log 2>&1
+log "starting microsocks"
+microsocks -i 0.0.0.0 -p 1080 >>/work/probe.log 2>&1 &
 sleep 2
 
 log "running trace through local socks"
