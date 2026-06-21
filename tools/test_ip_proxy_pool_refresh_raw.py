@@ -554,6 +554,45 @@ def test_refill_once_can_promote_sandbox_live_output_into_pool_refresh():
     assert not missing, missing
 
 
+def test_incremental_pool_target_counts_only_new_sandbox_live_exits():
+    from ip_proxy_incremental_pool_target import compute_incremental_target
+
+    result = compute_incremental_target(
+        target=5,
+        baseline_rows=[
+            {"raw": "http://127.0.0.1:19080", "exit_ip": "198.51.100.1"},
+            {"raw": "http://127.0.0.1:19081", "exit_ip": "198.51.100.2"},
+        ],
+        sandbox_live_rows=[
+            {"raw": "http://203.0.113.1:8080", "success": True, "sandbox_live": True, "exit_ip": "198.51.100.1"},
+            {"raw": "http://203.0.113.3:8080", "success": True, "sandbox_live": True, "exit_ip": "198.51.100.3"},
+            {"raw": "http://203.0.113.4:8080", "success": True, "checked_from": "sandbox", "trace_ip": "198.51.100.4"},
+            {"raw": "http://203.0.113.5:8080", "success": False, "sandbox_live": False, "exit_ip": "198.51.100.5"},
+        ],
+    )
+
+    assert result["status"] == "incremental_pool_target"
+    assert result["baseline_count"] == 2
+    assert result["sandbox_live_exits"] == 3
+    assert result["new_live_exits"] == 2
+    assert result["effective_limit"] == 4
+    assert result["min_new_candidates"] == 2
+
+
+def test_refill_once_can_incrementally_grow_from_sandbox_live_output():
+    text = (ROOT / "tools/ip_proxy_refill_once.sh").read_text(encoding="utf-8")
+    required = [
+        'IP_PROXY_INCREMENTAL_GROW',
+        'tools/ip_proxy_incremental_pool_target.py',
+        '"effective_limit"',
+        '"min_new_candidates"',
+        'IP_PROXY_MIN_NEW_CANDIDATES="$(',
+        'no_new_sandbox_live_capacity',
+    ]
+    missing = [item for item in required if item not in text]
+    assert not missing, missing
+
+
 def test_subscription_renderers_keep_direct_proxies_in_resin_only():
     from ip_proxy_pool_refresh import normalize_row
     from ip_proxy_subscription_export import render_clash, render_resin, render_vless

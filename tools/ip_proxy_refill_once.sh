@@ -40,6 +40,7 @@ IP_PROXY_MAX_COMPANY_RATIO="${IP_PROXY_MAX_COMPANY_RATIO:-0.24}"
 IP_PROXY_MAX_ASN_RATIO="${IP_PROXY_MAX_ASN_RATIO:-0.24}"
 WITH_GROK="${WITH_GROK:-0}"
 WITH_SANDBOX_LIVE_CHECK="${WITH_SANDBOX_LIVE_CHECK:-0}"
+IP_PROXY_INCREMENTAL_GROW="${IP_PROXY_INCREMENTAL_GROW:-0}"
 SANDBOX_LIVE_MAX_CHECK="${SANDBOX_LIVE_MAX_CHECK:-500}"
 SANDBOX_LIVE_WORKERS="${SANDBOX_LIVE_WORKERS:-24}"
 SANDBOX_LIVE_TIMEOUT="${SANDBOX_LIVE_TIMEOUT:-12}"
@@ -191,6 +192,20 @@ if [[ "$POOL_MODE" == "relaxed" || "$POOL_MODE" == "raw" ]]; then
   [[ -z "$IP_PROXY_MAX_COUNTRY_RATIO_WAS_SET" ]] && IP_PROXY_MAX_COUNTRY_RATIO="0"
   [[ -z "$IP_PROXY_MAX_COMPANY_RATIO_WAS_SET" ]] && IP_PROXY_MAX_COMPANY_RATIO="0"
   [[ -z "$IP_PROXY_MAX_ASN_RATIO_WAS_SET" ]] && IP_PROXY_MAX_ASN_RATIO="0"
+fi
+if [[ "$IP_PROXY_INCREMENTAL_GROW" == "1" && -n "$SANDBOX_LIVE_POOL_INPUT" && "$SANDBOX_LIVE_COUNT" != "0" ]]; then
+  INCREMENTAL_TARGET_JSON="$("$PYTHON_BIN" tools/ip_proxy_incremental_pool_target.py \
+    --target "$IP_PROXY_POOL_SIZE" \
+    --baseline "${IP_PROXY_RUNTIME_DIR:-.runtime/ip-proxy}/turn_xray_pool_20260608.json" \
+    --sandbox-live "$SANDBOX_LIVE_POOL_INPUT")"
+  echo "$INCREMENTAL_TARGET_JSON"
+  IP_PROXY_POOL_SIZE="$("$PYTHON_BIN" -c 'import json,sys; print(int(json.loads(sys.argv[1])["effective_limit"]))' "$INCREMENTAL_TARGET_JSON")"
+  IP_PROXY_MIN_NEW_CANDIDATES="$("$PYTHON_BIN" -c 'import json,sys; print(int(json.loads(sys.argv[1])["min_new_candidates"]))' "$INCREMENTAL_TARGET_JSON")"
+  INCREMENTAL_NEW_LIVE_EXITS="$("$PYTHON_BIN" -c 'import json,sys; print(int(json.loads(sys.argv[1])["new_live_exits"]))' "$INCREMENTAL_TARGET_JSON")"
+  if [[ "$IP_PROXY_MIN_NEW_CANDIDATES" == "0" || "$INCREMENTAL_NEW_LIVE_EXITS" == "0" ]]; then
+    IP_PROXY_APPLY_RUNTIME="0"
+    echo '{"status":"guarded","reason":"no_new_sandbox_live_capacity","apply_runtime":false}'
+  fi
 fi
 
 POOL_REFRESH_INPUT=".runtime/ip-proxy/resin/clean_candidates_classified.latest.json"
