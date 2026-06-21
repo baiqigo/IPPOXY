@@ -61,6 +61,11 @@ WITH_LAYER0_INTAKE="${WITH_LAYER0_INTAKE:-1}"
 WITH_LAYER0_CONSUMER="${WITH_LAYER0_CONSUMER:-0}"
 WITH_LAYER0_HTTP_SOCKS_CHECK="${WITH_LAYER0_HTTP_SOCKS_CHECK:-1}"
 WITH_LAYER0_STAGE0_HEALTHCHECK="${WITH_LAYER0_STAGE0_HEALTHCHECK:-0}"
+LAYER0_STAGE0_MAX_CANDIDATES="${LAYER0_STAGE0_MAX_CANDIDATES:-500}"
+LAYER0_STAGE0_BATCH_SIZE="${LAYER0_STAGE0_BATCH_SIZE:-50}"
+LAYER0_STAGE0_WORKERS="${LAYER0_STAGE0_WORKERS:-10}"
+LAYER0_STAGE0_TIMEOUT="${LAYER0_STAGE0_TIMEOUT:-8}"
+LAYER0_STAGE0_STOP_AFTER_SUCCESS="${LAYER0_STAGE0_STOP_AFTER_SUCCESS:-0}"
 LAYER0_SOURCE_REGISTRY="${LAYER0_SOURCE_REGISTRY:-tools/layer0_sources.json}"
 LAYER0_INTAKE_TIMEOUT="${LAYER0_INTAKE_TIMEOUT:-8}"
 LAYER0_INTAKE_WORKERS="${LAYER0_INTAKE_WORKERS:-8}"
@@ -109,12 +114,26 @@ if [[ -n "$ONLY_KIND" ]]; then
   done
 fi
 
+STAGE0_POOL_INPUT=""
+STAGE0_LIVE_COUNT="0"
+
 "$PYTHON_BIN" tools/ip_proxy_candidate_harvest.py "${HARVEST_ARGS[@]}"
 
 if [[ "$WITH_LAYER0_STAGE0_HEALTHCHECK" == "1" && -s "$LAYER0_SUBSCRIPTION_RAW" ]]; then
   "$PYTHON_BIN" tools/ip_proxy_stage0_healthcheck.py \
     --run-id "${RUN_ID}_layer0_stage0" \
-    --input "$LAYER0_SUBSCRIPTION_RAW" || true
+    --input "$LAYER0_SUBSCRIPTION_RAW" \
+    --max-candidates "$LAYER0_STAGE0_MAX_CANDIDATES" \
+    --sample-candidates \
+    --batch-size "$LAYER0_STAGE0_BATCH_SIZE" \
+    --workers "$LAYER0_STAGE0_WORKERS" \
+    --timeout "$LAYER0_STAGE0_TIMEOUT" \
+    --stop-after-success "$LAYER0_STAGE0_STOP_AFTER_SUCCESS" || true
+  STAGE0_POOL_INPUT=".runtime/ip-proxy/resin/all_candidates_classified_${RUN_ID}_layer0_stage0.json"
+  if [[ -s "$STAGE0_POOL_INPUT" ]]; then
+    STAGE0_LIVE_COUNT="$("$PYTHON_BIN" -c 'import json,sys; rows=json.load(open(sys.argv[1], encoding="utf-8-sig")); print(sum(1 for r in rows if isinstance(r, dict) and r.get("success") and r.get("sandbox_live")))' "$STAGE0_POOL_INPUT")"
+    echo "{\"status\":\"stage0_promotable_candidates\",\"input\":\"$STAGE0_POOL_INPUT\",\"live\":$STAGE0_LIVE_COUNT}"
+  fi
 fi
 
 CLASSIFY_JSON="$("$PYTHON_BIN" tools/ip_proxy_classify_clean.py \
@@ -132,19 +151,68 @@ fi
 
 "$PYTHON_BIN" tools/ip_proxy_registrar_feedback.py || true
 
-SANDBOX_LIVE_POOL_INPUT=""
-SANDBOX_LIVE_COUNT="0"
+DIRECT_SANDBOX_LIVE_POOL_INPUT=""
+DIRECT_SANDBOX_LIVE_COUNT="0"
 if [[ "$WITH_SANDBOX_LIVE_CHECK" == "1" && -s "$LAYER0_HTTP_SOCKS_POOL" ]]; then
-  SANDBOX_LIVE_POOL_INPUT=".runtime/ip-proxy/research/proxy_candidate_sandbox_live_${RUN_ID}.json"
+  DIRECT_SANDBOX_LIVE_POOL_INPUT=".runtime/ip-proxy/research/proxy_candidate_sandbox_live_${RUN_ID}.json"
   SANDBOX_LIVE_JSON="$("$PYTHON_BIN" tools/ip_proxy_sandbox_live_check.py \
     --input "$LAYER0_HTTP_SOCKS_POOL" \
-    --output "$SANDBOX_LIVE_POOL_INPUT" \
+    --output "$DIRECT_SANDBOX_LIVE_POOL_INPUT" \
     --run-id "$RUN_ID" \
     --timeout "$SANDBOX_LIVE_TIMEOUT" \
     --workers "$SANDBOX_LIVE_WORKERS" \
     --max-check "$SANDBOX_LIVE_MAX_CHECK")"
   echo "$SANDBOX_LIVE_JSON"
-  SANDBOX_LIVE_COUNT="$("$PYTHON_BIN" -c 'import json,sys; print(int(json.loads(sys.argv[1]).get("live") or 0))' "$SANDBOX_LIVE_JSON")"
+  DIRECT_SANDBOX_LIVE_COUNT="$("$PYTHON_BIN" -c 'import json,sys; print(int(json.loads(sys.argv[1]).get("live") or 0))' "$SANDBOX_LIVE_JSON")"
+fi
+
+SANDBOX_LIVE_POOL_INPUT=""
+SANDBOX_LIVE_COUNT="0"
+PROMOTION_INPUTS=()
+if [[ "$STAGE0_LIVE_COUNT" != "0" && -n "$STAGE0_POOL_INPUT" ]]; then
+  PROMOTION_INPUTS+=("$STAGE0_POOL_INPUT")
+fi
+if [[ "$DIRECT_SANDBOX_LIVE_COUNT" != "0" && -n "$DIRECT_SANDBOX_LIVE_POOL_INPUT" ]]; then
+  PROMOTION_INPUTS+=("$DIRECT_SANDBOX_LIVE_POOL_INPUT")
+fi
+if [[ "${#PROMOTION_INPUTS[@]}" -gt 0 ]]; then
+  SANDBOX_LIVE_POOL_INPUT=".runtime/ip-proxy/research/proxy_candidate_sandbox_promoted_${RUN_ID}.json"
+  PROMOTION_JSON="$("$PYTHON_BIN" - "$SANDBOX_LIVE_POOL_INPUT" "${PROMOTION_INPUTS[@]}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+out_path = Path(sys.argv[1])
+rows = []
+seen = set()
+for value in sys.argv[2:]:
+    path = Path(value)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        data = []
+    if not isinstance(data, list):
+        continue
+    for row in data:
+        if not isinstance(row, dict) or not row.get("success") or not row.get("sandbox_live"):
+            continue
+        raw = str(row.get("raw") or row.get("turn") or "")
+        exit_ip = str(row.get("exit_ip") or row.get("trace_ip") or "")
+        key = (raw, exit_ip)
+        if not raw or not exit_ip or key in seen:
+            continue
+        seen.add(key)
+        item = dict(row)
+        item["sandbox_live"] = True
+        item["checked_from"] = item.get("checked_from") or "sandbox"
+        rows.append(item)
+out_path.parent.mkdir(parents=True, exist_ok=True)
+out_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print(json.dumps({"status": "sandbox_promoted_candidates", "output": str(out_path), "live": len(rows)}, ensure_ascii=False))
+PY
+)"
+  echo "$PROMOTION_JSON"
+  SANDBOX_LIVE_COUNT="$("$PYTHON_BIN" -c 'import json,sys; print(int(json.loads(sys.argv[1]).get("live") or 0))' "$PROMOTION_JSON")"
   if [[ "$SANDBOX_LIVE_COUNT" != "0" ]]; then
     export IP_PROXY_REQUIRE_SANDBOX_LIVE_CANDIDATES=1
   fi
@@ -192,6 +260,11 @@ if [[ "$POOL_MODE" == "relaxed" || "$POOL_MODE" == "raw" ]]; then
   [[ -z "$IP_PROXY_MAX_COUNTRY_RATIO_WAS_SET" ]] && IP_PROXY_MAX_COUNTRY_RATIO="0"
   [[ -z "$IP_PROXY_MAX_COMPANY_RATIO_WAS_SET" ]] && IP_PROXY_MAX_COMPANY_RATIO="0"
   [[ -z "$IP_PROXY_MAX_ASN_RATIO_WAS_SET" ]] && IP_PROXY_MAX_ASN_RATIO="0"
+fi
+if [[ "$IP_PROXY_INCREMENTAL_GROW" == "1" && -z "$SANDBOX_LIVE_POOL_INPUT" ]]; then
+  echo '{"status":"guarded","reason":"no_sandbox_live_candidates","apply_runtime":false}'
+  echo "{\"run_id\":\"$RUN_ID\",\"status\":\"ok\",\"pool_mode\":\"$POOL_MODE\",\"promotion\":\"none\"}"
+  exit 0
 fi
 if [[ "$IP_PROXY_INCREMENTAL_GROW" == "1" && -n "$SANDBOX_LIVE_POOL_INPUT" && "$SANDBOX_LIVE_COUNT" != "0" ]]; then
   INCREMENTAL_TARGET_JSON="$("$PYTHON_BIN" tools/ip_proxy_incremental_pool_target.py \

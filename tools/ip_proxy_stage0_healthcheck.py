@@ -231,6 +231,45 @@ def parse_ss(raw):
 
 PARSERS = {'vless': parse_vless, 'vmess': parse_vmess, 'trojan': parse_trojan, 'ss': parse_ss}
 
+def sample_key(candidate, index, seed):
+    raw = str(candidate.get('raw') or '')
+    source = str(candidate.get('source') or candidate.get('source_id') or '')
+    kind = str(candidate.get('kind') or '')
+    return hashlib.sha256(f'{seed}|{kind}|{source}|{raw}|{index}'.encode('utf-8')).hexdigest()
+
+
+def select_candidates_for_check(candidates, max_candidates, seed):
+    if max_candidates <= 0 or len(candidates) <= max_candidates:
+        return candidates
+
+    buckets = {}
+    for index, candidate in enumerate(candidates):
+        kind = str(candidate.get('kind') or 'unknown').lower()
+        source = str(candidate.get('source') or candidate.get('source_id') or 'unknown')
+        buckets.setdefault((kind, source), []).append((index, candidate))
+
+    bucket_items = list(buckets.items())
+    bucket_items.sort(key=lambda item: hashlib.sha256(f'{seed}|{item[0][0]}|{item[0][1]}'.encode('utf-8')).hexdigest())
+    for _key, bucket in bucket_items:
+        bucket.sort(key=lambda item: sample_key(item[1], item[0], seed))
+
+    selected = []
+    offsets = [0 for _ in bucket_items]
+    while len(selected) < max_candidates:
+        progressed = False
+        for bucket_index, (_key, bucket) in enumerate(bucket_items):
+            offset = offsets[bucket_index]
+            if offset >= len(bucket):
+                continue
+            selected.append(bucket[offset][1])
+            offsets[bucket_index] += 1
+            progressed = True
+            if len(selected) >= max_candidates:
+                break
+        if not progressed:
+            break
+    return selected
+
 def generate_batch_config(candidates, base_port):
     inbounds = []
     outbounds = []
@@ -348,6 +387,8 @@ def main():
                         help='skip this many parsed candidates before checking')
     parser.add_argument('--max-candidates', type=int, default=0,
                         help='maximum parsed candidates to check after --start-index; 0 means all')
+    parser.add_argument('--sample-candidates', action='store_true',
+                        help='spread --max-candidates across source/kind buckets instead of taking the file head')
     parser.add_argument('--stop-after-success', type=int, default=0,
                         help='stop once this many live candidates are found; 0 disables early stop')
     args = parser.parse_args()
@@ -394,7 +435,10 @@ def main():
     if start_index:
         parsed = parsed[start_index:]
     if args.max_candidates and args.max_candidates > 0:
-        parsed = parsed[:args.max_candidates]
+        if args.sample_candidates:
+            parsed = select_candidates_for_check(parsed, args.max_candidates, run_id)
+        else:
+            parsed = parsed[:args.max_candidates]
     if len(parsed) != original_parsed_count:
         print(
             f'Checking window: start_index={start_index}, '
@@ -427,6 +471,7 @@ def main():
             for c in batch:
                 all_results.append({'kind': c['kind'], 'protocol': c['protocol'], 'raw': c['raw'],
                     'host': c['host'], 'port': c['port'], 'exit_ip': '', 'success': False,
+                    'sandbox_live': False, 'checked_from': 'sandbox',
                     'dirty': ['dead'], 'registration_tier': 'dirty',
                     'source': c.get('source', ''), 'source_project': c.get('source_project', ''),
                     'dedup_key': c.get('dedup_key', '')})
@@ -446,6 +491,7 @@ def main():
                 checked_items = list(executor.map(check_batch_item, enumerate(batch)))
 
         for i, c, port, ip_info in checked_items:
+            live = ip_info is not None
             if ip_info is None:
                 tier, dirty = 'dirty', ['dead']
                 exit_ip = country = city = company = company_type = asn_type = isp = org = ''
@@ -473,7 +519,9 @@ def main():
 
             all_results.append({'kind': c['kind'], 'protocol': c['protocol'], 'raw': c['raw'],
                 'host': c['host'], 'port': c['port'], 'exit_ip': exit_ip,
-                'success': ip_info is not None, 'dirty': dirty, 'registration_tier': tier,
+                'success': live, 'sandbox_live': live, 'checked_from': 'sandbox',
+                'live_check': {'success': live, 'checked_from': 'sandbox', 'exit_ip': exit_ip},
+                'dirty': dirty, 'registration_tier': tier,
                 'country': country, 'city': city, 'company': company,
                 'company_type': company_type, 'asn_type': asn_type,
                 'isp': isp, 'org': org, 'responseTime': response_time,

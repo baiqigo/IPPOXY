@@ -593,6 +593,20 @@ def test_refill_once_can_incrementally_grow_from_sandbox_live_output():
     assert not missing, missing
 
 
+def test_refill_once_promotes_stage0_subscription_live_candidates():
+    text = (ROOT / "tools/ip_proxy_refill_once.sh").read_text(encoding="utf-8")
+    required = [
+        'WITH_LAYER0_STAGE0_HEALTHCHECK',
+        '--sample-candidates',
+        'stage0_promotable_candidates',
+        'proxy_candidate_sandbox_promoted_${RUN_ID}.json',
+        'sandbox_promoted_candidates',
+        'no_sandbox_live_candidates',
+    ]
+    missing = [item for item in required if item not in text]
+    assert not missing, missing
+
+
 def test_subscription_renderers_keep_direct_proxies_in_resin_only():
     from ip_proxy_pool_refresh import normalize_row
     from ip_proxy_subscription_export import render_clash, render_resin, render_vless
