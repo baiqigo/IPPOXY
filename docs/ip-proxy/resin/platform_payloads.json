@@ -49,7 +49,7 @@
       "name": "IPPOXY_RAW",
       "sticky_ttl": "30m",
       "regex_filters": [
-        "ippoxy-raw-"
+        "ippoxy-(raw|res|static|relaxed|isp)-"
       ],
       "region_filters": [],
       "allocation_policy": "PREFER_LOW_LATENCY",

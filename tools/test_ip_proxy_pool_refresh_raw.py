@@ -531,6 +531,6 @@ def test_resin_platform_payloads_expose_l3_raw_without_polluting_relaxed():
     platforms = {item["name"]: item for item in payloads["platforms"]}
 
     assert "IPPOXY_RAW" in platforms
-    assert platforms["IPPOXY_RAW"]["regex_filters"] == ["ippoxy-raw-"]
+    assert platforms["IPPOXY_RAW"]["regex_filters"] == ["ippoxy-(raw|res|static|relaxed|isp)-"]
     assert "ippoxy-raw-" not in "".join(platforms["IPPOXY_RELAXED"]["regex_filters"])
     assert payloads["registrar_proxy_examples"]["raw_bulk"].startswith("socks5h://IPPOXY_RAW.")
