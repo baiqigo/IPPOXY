@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import os
 import subprocess
@@ -249,6 +250,46 @@ def filter_candidate_kinds(rows: list[dict], only_kinds: set[str]) -> list[dict]
     return [row for row in rows if str(row.get("kind") or "").lower() in only_kinds]
 
 
+def sample_key(row: dict, index: int, seed: str) -> str:
+    raw = str(row.get("raw") or "")
+    source = str(row.get("source") or row.get("source_id") or "")
+    kind = str(row.get("kind") or "")
+    return hashlib.sha256(f"{seed}|{kind}|{source}|{raw}|{index}".encode("utf-8")).hexdigest()
+
+
+def select_candidates_for_check(rows: list[dict], max_check: int, seed: str) -> list[dict]:
+    if max_check <= 0 or len(rows) <= max_check:
+        return rows
+
+    buckets: dict[tuple[str, str], list[tuple[int, dict]]] = {}
+    for index, row in enumerate(rows):
+        kind = str(row.get("kind") or "unknown").lower()
+        source = str(row.get("source") or row.get("source_id") or "unknown")
+        buckets.setdefault((kind, source), []).append((index, row))
+
+    bucket_items = list(buckets.items())
+    bucket_items.sort(key=lambda item: hashlib.sha256(f"{seed}|{item[0][0]}|{item[0][1]}".encode("utf-8")).hexdigest())
+    for _key, bucket in bucket_items:
+        bucket.sort(key=lambda item: sample_key(item[1], item[0], seed))
+
+    selected: list[dict] = []
+    offsets = [0 for _ in bucket_items]
+    while len(selected) < max_check:
+        progressed = False
+        for bucket_index, (_key, bucket) in enumerate(bucket_items):
+            offset = offsets[bucket_index]
+            if offset >= len(bucket):
+                continue
+            selected.append(bucket[offset][1])
+            offsets[bucket_index] += 1
+            progressed = True
+            if len(selected) >= max_check:
+                break
+        if not progressed:
+            break
+    return selected
+
+
 def run_checks(
     rows: list[dict],
     *,
@@ -306,8 +347,9 @@ def main() -> int:
     run_id = args.run_id or time.strftime("%Y%m%d_%H%M%S")
     output = args.output or (RESEARCH_DIR / f"proxy_candidate_sandbox_live_{run_id}.json")
     rows = filter_candidate_kinds(load_candidate_rows(args.input), set(args.only_kind or []))
+    input_candidates = len(rows)
     if args.max_check and args.max_check > 0:
-        rows = rows[: args.max_check]
+        rows = select_candidates_for_check(rows, args.max_check, run_id)
     results = run_checks(rows, timeout=args.timeout, workers=max(1, args.workers), trace_url=args.trace_url)
     write_json(output, results)
     latest = None
@@ -319,6 +361,9 @@ def main() -> int:
         "input": str(args.input),
         "output": str(output),
         "latest": str(latest) if latest else "",
+        "input_candidates": input_candidates,
+        "selected_for_check": len(rows),
+        "sample_strategy": "source_kind_hash_round_robin" if args.max_check and args.max_check > 0 else "all",
         **summary(results),
     }
     print(json.dumps(result_summary, ensure_ascii=False))

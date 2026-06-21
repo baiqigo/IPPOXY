@@ -110,3 +110,20 @@ def test_check_candidate_rejects_unsupported_kind_cleanly():
     assert row["success"] is False
     assert row["sandbox_live"] is False
     assert row["failure_reason"] == "unsupported_kind:turn"
+
+
+def test_select_candidates_for_check_spreads_across_sources_and_kinds():
+    from ip_proxy_sandbox_live_check import select_candidates_for_check
+
+    rows = (
+        [{"kind": "http", "raw": f"http://203.0.113.{idx}:8080", "source": "http_a"} for idx in range(100)]
+        + [{"kind": "http", "raw": f"http://203.0.114.{idx}:8080", "source": "http_b"} for idx in range(100)]
+        + [{"kind": "socks5", "raw": f"socks5://203.0.115.{idx}:1080", "source": "socks_a"} for idx in range(100)]
+    )
+
+    selected = select_candidates_for_check(rows, 6, "run-a")
+
+    assert len(selected) == 6
+    assert {row["source"] for row in selected} == {"http_a", "http_b", "socks_a"}
+    assert {row["kind"] for row in selected} == {"http", "socks5"}
+    assert selected != rows[:6]
