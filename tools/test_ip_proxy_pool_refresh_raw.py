@@ -123,6 +123,73 @@ def test_raw_pool_mode_promotes_checked_http_socks_and_l3_candidates(tmp_path):
     }
 
 
+def test_relaxed_pool_mode_uses_configurable_default_active_pool_size(tmp_path):
+    input_path = tmp_path / "runtime/resin/relaxed_candidates_classified.latest.json"
+    baseline_path = tmp_path / "baseline.json"
+    source_quality_path = tmp_path / "source_quality.json"
+    rows = [
+        {
+            "kind": "http",
+            "raw": f"http://203.0.113.{idx}:8080",
+            "success": True,
+            "registration_tier": "clean",
+            "dirty": [],
+            "exit_ip": f"198.51.100.{idx}",
+            "country": "US",
+            "company": "Default Pool Size",
+            "responseTime": 100 + idx,
+        }
+        for idx in range(1, 5)
+    ]
+    write_json(input_path, rows)
+    write_json(baseline_path, [])
+    write_json(source_quality_path, {"by_source": {}})
+
+    env = {
+        **os.environ,
+        "IPPOXY_ROOT": str(tmp_path / "root"),
+        "IP_PROXY_RUNTIME_DIR": str(tmp_path / "runtime"),
+        "IP_PROXY_DEFAULT_POOL_SIZE": "4",
+    }
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools/ip_proxy_pool_refresh.py"),
+            "--input",
+            str(input_path),
+            "--baseline",
+            str(baseline_path),
+            "--source-quality",
+            str(source_quality_path),
+            "--verify",
+            str(tmp_path / "missing_verify.json"),
+            "--registrar-feedback",
+            str(tmp_path / "missing_feedback.json"),
+            "--pool-mode",
+            "relaxed",
+            "--min-clean",
+            "4",
+            "--min-new-candidates",
+            "4",
+            "--max-fallback-candidate-age-hours",
+            "0",
+            "--allow-selection-quality-failures",
+            "--dry-run",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    result = json.loads(proc.stdout)
+    assert result["status"] == "ok", result
+    assert result["limit"] == 4, result
+    assert result["selected"] == 4, result
+
+
 def test_raw_non_dry_run_requires_sandbox_live_candidates_by_default(tmp_path):
     input_path = tmp_path / "runtime/resin/all_candidates_classified.latest.json"
     baseline_path = tmp_path / "baseline.json"

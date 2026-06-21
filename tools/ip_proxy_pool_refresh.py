@@ -55,8 +55,9 @@ DEFAULT_MIN_COUNTRIES = int(os.environ.get("IP_PROXY_MIN_COUNTRIES", "8"))
 DEFAULT_MAX_COUNTRY_RATIO = float(os.environ.get("IP_PROXY_MAX_COUNTRY_RATIO", "0.40") or "0")
 DEFAULT_MAX_COMPANY_RATIO = float(os.environ.get("IP_PROXY_MAX_COMPANY_RATIO", "0.24") or "0")
 DEFAULT_MAX_ASN_RATIO = float(os.environ.get("IP_PROXY_MAX_ASN_RATIO", "0.24") or "0")
+DEFAULT_ACTIVE_POOL_SIZE = int(os.environ.get("IP_PROXY_DEFAULT_POOL_SIZE", "500"))
 RELAXED_QUANTITY_DEFAULTS = {
-    "limit": (80, "--limit", "IP_PROXY_POOL_SIZE"),
+    "limit": (DEFAULT_ACTIVE_POOL_SIZE, "--limit", "IP_PROXY_POOL_SIZE"),
     "min_clean": (1, "--min-clean", "IP_PROXY_MIN_CLEAN"),
     "min_new_candidates": (55, "--min-new-candidates", "IP_PROXY_MIN_NEW_CANDIDATES"),
     "max_risky_candidates": (-1, "--max-risky-candidates", "IP_PROXY_MAX_RISKY_CANDIDATES"),
@@ -68,7 +69,7 @@ RELAXED_QUANTITY_DEFAULTS = {
     "max_asn_ratio": (0.0, "--max-asn-ratio", "IP_PROXY_MAX_ASN_RATIO"),
 }
 RAW_QUANTITY_DEFAULTS = {
-    "limit": (80, "--limit", "IP_PROXY_POOL_SIZE"),
+    "limit": (DEFAULT_ACTIVE_POOL_SIZE, "--limit", "IP_PROXY_POOL_SIZE"),
     "min_clean": (1, "--min-clean", "IP_PROXY_MIN_CLEAN"),
     "min_new_candidates": (55, "--min-new-candidates", "IP_PROXY_MIN_NEW_CANDIDATES"),
     "max_risky_candidates": (-1, "--max-risky-candidates", "IP_PROXY_MAX_RISKY_CANDIDATES"),
@@ -1087,7 +1088,11 @@ def main() -> int:
     parser.add_argument("--source-quality", type=Path, default=DEFAULT_SOURCE_QUALITY)
     parser.add_argument("--worker-host", default=DEFAULT_WORKER_HOST)
     parser.add_argument("--uuid", default=DEFAULT_UUID)
-    parser.add_argument("--limit", type=int, default=int(os.environ.get("IP_PROXY_POOL_SIZE", "25")))
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=int(os.environ.get("IP_PROXY_POOL_SIZE", os.environ.get("IP_PROXY_DEFAULT_POOL_SIZE", "25"))),
+    )
     parser.add_argument("--min-clean", type=int, default=int(os.environ.get("IP_PROXY_MIN_CLEAN", "12")))
     parser.add_argument("--min-new-candidates", type=int, default=int(os.environ.get("IP_PROXY_MIN_NEW_CANDIDATES", "8")))
     parser.add_argument(
