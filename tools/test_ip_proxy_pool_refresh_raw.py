@@ -541,6 +541,19 @@ def test_refill_once_exposes_raw_pool_mode():
     assert not missing, missing
 
 
+def test_refill_once_can_promote_sandbox_live_output_into_pool_refresh():
+    text = (ROOT / "tools/ip_proxy_refill_once.sh").read_text(encoding="utf-8")
+    required = [
+        'WITH_SANDBOX_LIVE_CHECK',
+        'tools/ip_proxy_sandbox_live_check.py',
+        'proxy_candidate_sandbox_live_${RUN_ID}.json',
+        'POOL_REFRESH_INPUT="$SANDBOX_LIVE_POOL_INPUT"',
+        '--require-sandbox-live-candidates',
+    ]
+    missing = [item for item in required if item not in text]
+    assert not missing, missing
+
+
 def test_subscription_renderers_keep_direct_proxies_in_resin_only():
     from ip_proxy_pool_refresh import normalize_row
     from ip_proxy_subscription_export import render_clash, render_resin, render_vless

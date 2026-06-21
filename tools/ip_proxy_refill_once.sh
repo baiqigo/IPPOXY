@@ -39,6 +39,10 @@ IP_PROXY_MAX_COUNTRY_RATIO="${IP_PROXY_MAX_COUNTRY_RATIO:-0.40}"
 IP_PROXY_MAX_COMPANY_RATIO="${IP_PROXY_MAX_COMPANY_RATIO:-0.24}"
 IP_PROXY_MAX_ASN_RATIO="${IP_PROXY_MAX_ASN_RATIO:-0.24}"
 WITH_GROK="${WITH_GROK:-0}"
+WITH_SANDBOX_LIVE_CHECK="${WITH_SANDBOX_LIVE_CHECK:-0}"
+SANDBOX_LIVE_MAX_CHECK="${SANDBOX_LIVE_MAX_CHECK:-500}"
+SANDBOX_LIVE_WORKERS="${SANDBOX_LIVE_WORKERS:-24}"
+SANDBOX_LIVE_TIMEOUT="${SANDBOX_LIVE_TIMEOUT:-12}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 mkdir -p .runtime/ip-proxy/research .runtime/ip-proxy/resin
@@ -127,6 +131,24 @@ fi
 
 "$PYTHON_BIN" tools/ip_proxy_registrar_feedback.py || true
 
+SANDBOX_LIVE_POOL_INPUT=""
+SANDBOX_LIVE_COUNT="0"
+if [[ "$WITH_SANDBOX_LIVE_CHECK" == "1" && -s "$LAYER0_HTTP_SOCKS_POOL" ]]; then
+  SANDBOX_LIVE_POOL_INPUT=".runtime/ip-proxy/research/proxy_candidate_sandbox_live_${RUN_ID}.json"
+  SANDBOX_LIVE_JSON="$("$PYTHON_BIN" tools/ip_proxy_sandbox_live_check.py \
+    --input "$LAYER0_HTTP_SOCKS_POOL" \
+    --output "$SANDBOX_LIVE_POOL_INPUT" \
+    --run-id "$RUN_ID" \
+    --timeout "$SANDBOX_LIVE_TIMEOUT" \
+    --workers "$SANDBOX_LIVE_WORKERS" \
+    --max-check "$SANDBOX_LIVE_MAX_CHECK")"
+  echo "$SANDBOX_LIVE_JSON"
+  SANDBOX_LIVE_COUNT="$("$PYTHON_BIN" -c 'import json,sys; print(int(json.loads(sys.argv[1]).get("live") or 0))' "$SANDBOX_LIVE_JSON")"
+  if [[ "$SANDBOX_LIVE_COUNT" != "0" ]]; then
+    export IP_PROXY_REQUIRE_SANDBOX_LIVE_CANDIDATES=1
+  fi
+fi
+
 if [[ "$IP_PROXY_POOL_MODE" == "auto" ]]; then
   POOL_MODE="$(IP_PROXY_MIN_CLEAN="$IP_PROXY_MIN_CLEAN" "$PYTHON_BIN" -c 'import json, os; from pathlib import Path
 root=Path(".runtime/ip-proxy/resin")
@@ -177,6 +199,9 @@ if [[ "$POOL_MODE" == "relaxed" ]]; then
 elif [[ "$POOL_MODE" == "raw" ]]; then
   POOL_REFRESH_INPUT=".runtime/ip-proxy/resin/all_candidates_classified.latest.json"
 fi
+if [[ -n "$SANDBOX_LIVE_POOL_INPUT" && "$SANDBOX_LIVE_COUNT" != "0" ]]; then
+  POOL_REFRESH_INPUT="$SANDBOX_LIVE_POOL_INPUT"
+fi
 POOL_REFRESH_ARGS=(
   --input "$POOL_REFRESH_INPUT"
   --pool-mode "$POOL_MODE"
@@ -198,6 +223,9 @@ if [[ "${IP_PROXY_ALLOW_SELECTION_QUALITY_FAILURES:-0}" == "1" ]]; then
 fi
 if [[ "${IP_PROXY_ALLOW_STALE_FALLBACK_CANDIDATES:-0}" == "1" ]]; then
   POOL_REFRESH_ARGS+=(--allow-stale-fallback-candidates)
+fi
+if [[ -n "$SANDBOX_LIVE_POOL_INPUT" && "$SANDBOX_LIVE_COUNT" != "0" ]]; then
+  POOL_REFRESH_ARGS+=(--require-sandbox-live-candidates)
 fi
 if [[ -n "${IP_PROXY_TURN_WORKER_HOST:-}" ]]; then
   POOL_REFRESH_ARGS+=(--worker-host "$IP_PROXY_TURN_WORKER_HOST")
