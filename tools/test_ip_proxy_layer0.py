@@ -149,6 +149,11 @@ class TestConsumerParse:
         result = parse_line("socks5://77.110.126.90:1080", source="gfpcom_socks5", kind="socks5")
         assert result == {"kind": "socks5", "raw": "socks5://77.110.126.90:1080", "source": "gfpcom_socks5"}
 
+    def test_url_format_prefers_explicit_protocol_over_source_default(self):
+        from ip_proxy_layer0_consumer import parse_line
+        result = parse_line("http://147.161.246.38:10920", source="dynamic_mixed", kind="socks5")
+        assert result == {"kind": "http", "raw": "http://147.161.246.38:10920", "source": "dynamic_mixed"}
+
     def test_base64_subscription_decoded(self):
         from ip_proxy_layer0_consumer import parse_line
         import base64

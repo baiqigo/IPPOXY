@@ -77,6 +77,88 @@
       "url": "https://raw.githubusercontent.com/Argh94/Proxy-List/main/HTTP.txt",
       "kind": "http",
       "type": "ip_port"
+    },
+    {
+      "name": "zebbern_http",
+      "url": "https://raw.githubusercontent.com/zebbern/Proxy-Scraper/main/http.txt",
+      "kind": "http",
+      "type": "ip_port",
+      "max_bytes": 800000,
+      "max_candidates": 50000
+    },
+    {
+      "name": "proxyscrape_repo_http",
+      "url": "https://cdn.jsdelivr.net/gh/proxyscrape/free-proxy-list@main/proxies/protocols/http/data.txt",
+      "kind": "http",
+      "type": "ip_port"
+    },
+    {
+      "name": "aliilapro_http",
+      "url": "https://raw.githubusercontent.com/ALIILAPRO/Proxy/main/http.txt",
+      "kind": "http",
+      "type": "ip_port"
+    },
+    {
+      "name": "clearproxy_http_all",
+      "url": "https://raw.githubusercontent.com/ClearProxy/checked-proxy-list/main/http/raw/all.txt",
+      "kind": "http",
+      "type": "ip_port"
+    },
+    {
+      "name": "gfpcom_http",
+      "url": "https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/http.txt",
+      "kind": "http",
+      "type": "ip_port",
+      "max_bytes": 800000,
+      "max_candidates": 30000
+    },
+    {
+      "name": "spysme_http",
+      "url": "https://spys.me/proxy.txt",
+      "kind": "http",
+      "type": "regex_ip_port",
+      "max_bytes": 600000,
+      "max_candidates": 5000
+    },
+    {
+      "name": "my_proxy_hourly_http",
+      "url": "https://www.my-proxy.com/free-proxy-list.html",
+      "kind": "http",
+      "type": "regex_ip_port",
+      "max_bytes": 500000,
+      "max_candidates": 5000
+    },
+    {
+      "name": "free_proxy_list_http",
+      "url": "https://free-proxy-list.net/",
+      "kind": "http",
+      "type": "html_proxy_table",
+      "max_bytes": 500000,
+      "max_candidates": 1000
+    },
+    {
+      "name": "sslproxies_https",
+      "url": "https://www.sslproxies.org/",
+      "kind": "https",
+      "type": "html_proxy_table",
+      "max_bytes": 500000,
+      "max_candidates": 1000
+    },
+    {
+      "name": "openproxy_space_http",
+      "url": "https://openproxy.space/list/http",
+      "kind": "http",
+      "type": "openproxy_space",
+      "max_bytes": 1200000,
+      "max_candidates": 5000
+    },
+    {
+      "name": "proxifly_all_json",
+      "url": "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/all/data.json",
+      "kind": "http",
+      "type": "proxifly_json",
+      "max_bytes": 1200000,
+      "max_candidates": 5000
     }
   ],
   "socks_sources": [
@@ -139,6 +221,100 @@
       "url": "https://raw.githubusercontent.com/kort0881/telegram-proxy-collector/main/proxy_all.txt",
       "kind": "socks5",
       "type": "ip_port"
+    },
+    {
+      "name": "zebbern_socks4",
+      "url": "https://raw.githubusercontent.com/zebbern/Proxy-Scraper/main/socks4.txt",
+      "kind": "socks4",
+      "type": "ip_port",
+      "max_bytes": 800000,
+      "max_candidates": 50000
+    },
+    {
+      "name": "zebbern_socks5",
+      "url": "https://raw.githubusercontent.com/zebbern/Proxy-Scraper/main/socks5.txt",
+      "kind": "socks5",
+      "type": "ip_port",
+      "max_bytes": 800000,
+      "max_candidates": 50000
+    },
+    {
+      "name": "proxyscrape_repo_socks4",
+      "url": "https://cdn.jsdelivr.net/gh/proxyscrape/free-proxy-list@main/proxies/protocols/socks4/data.txt",
+      "kind": "socks4",
+      "type": "ip_port"
+    },
+    {
+      "name": "proxyscrape_repo_socks5",
+      "url": "https://cdn.jsdelivr.net/gh/proxyscrape/free-proxy-list@main/proxies/protocols/socks5/data.txt",
+      "kind": "socks5",
+      "type": "ip_port"
+    },
+    {
+      "name": "aliilapro_socks4",
+      "url": "https://raw.githubusercontent.com/ALIILAPRO/Proxy/main/socks4.txt",
+      "kind": "socks4",
+      "type": "ip_port"
+    },
+    {
+      "name": "aliilapro_socks5",
+      "url": "https://raw.githubusercontent.com/ALIILAPRO/Proxy/main/socks5.txt",
+      "kind": "socks5",
+      "type": "ip_port"
+    },
+    {
+      "name": "clearproxy_socks4_all",
+      "url": "https://raw.githubusercontent.com/ClearProxy/checked-proxy-list/main/socks4/raw/all.txt",
+      "kind": "socks4",
+      "type": "ip_port"
+    },
+    {
+      "name": "gfpcom_socks4",
+      "url": "https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/socks4.txt",
+      "kind": "socks4",
+      "type": "ip_port",
+      "max_bytes": 800000,
+      "max_candidates": 30000
+    },
+    {
+      "name": "gfpcom_socks5",
+      "url": "https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/socks5.txt",
+      "kind": "socks5",
+      "type": "ip_port",
+      "max_bytes": 800000,
+      "max_candidates": 30000
+    },
+    {
+      "name": "spysme_socks",
+      "url": "https://spys.me/socks.txt",
+      "kind": "socks5",
+      "type": "regex_ip_port",
+      "max_bytes": 600000,
+      "max_candidates": 5000
+    },
+    {
+      "name": "socks_proxy_net",
+      "url": "https://www.socks-proxy.net/",
+      "kind": "socks5",
+      "type": "html_proxy_table",
+      "max_bytes": 500000,
+      "max_candidates": 1000
+    },
+    {
+      "name": "openproxy_space_socks4",
+      "url": "https://openproxy.space/list/socks4",
+      "kind": "socks4",
+      "type": "openproxy_space",
+      "max_bytes": 1200000,
+      "max_candidates": 5000
+    },
+    {
+      "name": "openproxy_space_socks5",
+      "url": "https://openproxy.space/list/socks5",
+      "kind": "socks5",
+      "type": "openproxy_space",
+      "max_bytes": 1200000,
+      "max_candidates": 5000
     }
   ],
   "subscription_sources": [
@@ -221,6 +397,77 @@
       "url": "http://pubproxy.com/api/proxy?limit=20&format=txt&type=http",
       "kind": "http",
       "type": "ip_port"
+    },
+    {
+      "name": "geonode_recent_pages",
+      "url": "https://proxylist.geonode.com/api/proxy-list?limit=500&page={page}&sort_by=lastChecked&sort_type=desc",
+      "kind": "http",
+      "type": "json_geonode",
+      "pages": 3,
+      "max_bytes": 700000,
+      "max_candidates": 1500
+    }
+  ],
+  "candidate_sources": [
+    {
+      "name": "cmliussss_vpngate",
+      "url": "https://sub.cmliussss.net/vpngate",
+      "kind": "sstp",
+      "type": "sstp_cmliussss"
+    },
+    {
+      "name": "delta_vpn_gate",
+      "url": "https://raw.githubusercontent.com/Delta-Kronecker/Vpn-Gate/refs/heads/main/sstp_hosts.txt",
+      "kind": "sstp",
+      "type": "sstp_hosts"
+    },
+    {
+      "name": "vpngate_official_api",
+      "url": "https://www.vpngate.net/api/iphone/",
+      "kind": "sstp",
+      "type": "vpngate_official"
+    },
+    {
+      "name": "f0rc3run_sstp",
+      "url": "https://raw.githubusercontent.com/F0rc3Run/F0rc3Run/refs/heads/main/sstp-configs/sstp_with_country.txt",
+      "kind": "sstp",
+      "type": "sstp_f0rc3run"
+    },
+    {
+      "name": "toicf_turn_results",
+      "url": "https://raw.githubusercontent.com/ToiCF/CF-Workers-TURN/main/turn_results.txt",
+      "kind": "turn",
+      "type": "turn_results"
+    },
+    {
+      "name": "cmliu_socks5api",
+      "url": "https://raw.githubusercontent.com/cmliu/Socks2Vlesssub/main/socks5api.txt",
+      "kind": "socks5",
+      "type": "socks5_lines"
+    },
+    {
+      "name": "cmliu_worker_socks5",
+      "url": "https://raw.githubusercontent.com/cmliu/WorkerVless2sub/main/socks5Data",
+      "kind": "socks5",
+      "type": "socks5_lines"
+    },
+    {
+      "name": "proxifly_socks5_candidate",
+      "url": "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt",
+      "kind": "socks5",
+      "type": "socks5_lines"
+    },
+    {
+      "name": "proxyscrape_socks5_candidate",
+      "url": "https://api.proxyscrape.com/v4/free-proxy-list/get?protocol=socks5&format=txt&timeout=10000&country=all",
+      "kind": "socks5",
+      "type": "socks5_lines"
+    },
+    {
+      "name": "speedx_socks5_candidate",
+      "url": "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
+      "kind": "socks5",
+      "type": "socks5_lines"
     }
   ]
 }

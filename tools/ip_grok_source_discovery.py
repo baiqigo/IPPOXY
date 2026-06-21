@@ -14,6 +14,7 @@ import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import subprocess
 from pathlib import Path
@@ -222,60 +223,26 @@ _STATIC_SOURCE_URLS: set[str] = {
 }
 
 
-# Common raw file paths to try when expanding a github_repo URL into fetchable raw URLs
-_GITHUB_REPO_EXPANSION_PATHS = [
-    "sub.txt",
-    "v2ray.txt",
-    "clash.yaml",
-    "proxy-list.txt",
-    "socks5.txt",
-    "socks5Data",
-    "turn_results.txt",
-    "sstp_hosts.txt",
-    "result.txt",
-]
-
-_GITHUB_REPO_EXPANSION_BRANCHES = ["main"]
+def _url_signal(url: str) -> str:
+    parsed = urllib.parse.urlparse(url.lower())
+    return " ".join([parsed.netloc, parsed.path, parsed.query, parsed.fragment])
 
 
-def _expand_github_repo(url: str) -> list[dict]:
-    """Expand a github_repo URL into candidate raw.githubusercontent.com URLs."""
-    m = re.match(r"https?://github\.com/([^/]+)/([^/]+)/?$", url.rstrip("/"))
-    if not m:
-        return []
-    owner, repo = m.group(1), m.group(2)
-    sources: list[dict] = []
-    seen_urls: set[str] = set()
-    for branch in _GITHUB_REPO_EXPANSION_BRANCHES:
-        for path in _GITHUB_REPO_EXPANSION_PATHS:
-            raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/refs/heads/{branch}/{path}"
-            if raw_url not in seen_urls:
-                seen_urls.add(raw_url)
-                # Determine expected_kind based on path keywords
-                path_lower = path.lower()
-                if "sstp" in path_lower:
-                    expected_kind = "sstp"
-                    source_type = "github_raw"
-                elif "turn" in path_lower:
-                    expected_kind = "turn"
-                    source_type = "github_raw"
-                elif "socks5" in path_lower or "socks" in path_lower or "proxy-list" in path_lower:
-                    expected_kind = "socks5"
-                    source_type = "github_raw"
-                elif any(kw in path_lower for kw in ("v2ray", "vless", "vmess", "clash", "sub", "trojan")):
-                    expected_kind = "subscription"
-                    source_type = "github_raw"
-                else:
-                    expected_kind = "unknown"
-                    source_type = "github_raw"
-                sources.append({
-                    "url": raw_url,
-                    "source_type": source_type,
-                    "expected_kind": expected_kind,
-                    "fetchable": True,
-                    "expanded_from": url,
-                })
-    return sources
+def _expected_kind_from_url(url: str) -> str:
+    signal = _url_signal(url)
+    if re.search(r"(?:^|[/_.-])socks4(?:[/_.-]|$)", signal):
+        return "socks4"
+    if re.search(r"(?:^|[/_.-])socks5?(?:[/_.-]|$)", signal):
+        return "socks5"
+    if re.search(r"(?:^|[/_.-])(v2ray|vless|vmess|trojan|clash|sub)(?:[/_.-]|$)", signal):
+        return "subscription"
+    if "protocol=socks5" in signal:
+        return "socks5"
+    if "protocol=socks4" in signal:
+        return "socks4"
+    if "protocol=http" in signal or re.search(r"(?:^|[/_.-])https?(?:[/_.-]|$)", signal):
+        return "http"
+    return "unknown"
 
 
 def classify_urls(urls: list[str]) -> list[dict]:
@@ -283,7 +250,7 @@ def classify_urls(urls: list[str]) -> list[dict]:
 
     Improvements over original:
     - Strips Grok markdown artifacts (**, quotes) from URLs
-    - Expands github_repo URLs into candidate raw.githubusercontent.com URLs
+    - Keeps github_repo URLs as discovery evidence, but does not treat them as fetchable raw sources
     - Marks gist raw URLs as fetchable
     - Classifies raw.cmliussss.com as fetchable
     - Adds subscription as a fetchable source_type
@@ -299,20 +266,23 @@ def classify_urls(urls: list[str]) -> list[dict]:
         seen_urls.add(url)
 
         url_lower = url.lower()
+        hinted_kind = _expected_kind_from_url(url)
         if "vpngate" in url_lower or "opengw" in url_lower or "sstp" in url_lower:
             source_type = "sstp_subscription"
         elif "turn" in url_lower and "cf-workers" in url_lower:
             source_type = "turn_list"
-        elif "socks5" in url_lower or "socks" in url_lower or "proxy-list" in url_lower or "proxyscrape" in url_lower or "proxifly" in url_lower:
+        elif "github.com" in url_lower and "raw" not in url_lower:
+            source_type = "github_repo"
+        elif hinted_kind in {"socks4", "socks5"}:
             source_type = "socks_subscription"
+        elif hinted_kind in {"http", "https"}:
+            source_type = "http_list"
         elif "raw.githubusercontent.com" in url_lower:
             source_type = "github_raw"
         elif "api." in url_lower and ("vpngate" in url_lower or "proxy" in url_lower):
             source_type = "official_api"
         elif "gist.githubusercontent.com" in url_lower:
             source_type = "gist_raw"
-        elif "github.com" in url_lower and "raw" not in url_lower:
-            source_type = "github_repo"
         else:
             source_type = "other"
         if source_type == "gist_raw":
@@ -335,17 +305,16 @@ def classify_urls(urls: list[str]) -> list[dict]:
         elif source_type == "turn_list":
             expected_kind = "turn"
         elif source_type == "socks_subscription":
-            expected_kind = "socks5"
+            expected_kind = hinted_kind if hinted_kind in {"socks4", "socks5"} else "socks5"
+        elif source_type == "http_list":
+            expected_kind = hinted_kind if hinted_kind in {"http", "https"} else "http"
         elif source_type == "github_raw":
-            if any(kw in url_lower for kw in ("v2ray", "vless", "vmess", "clash", "trojan", "sub", "free")):
-                expected_kind = "subscription"
-            else:
-                expected_kind = "unknown"
+            expected_kind = hinted_kind
         else:
             expected_kind = "unknown"
         fetchable = source_type in (
             "sstp_subscription", "official_api", "github_raw",
-            "socks_subscription", "turn_list", "gist_raw",
+            "socks_subscription", "http_list", "turn_list", "gist_raw",
         )
         # Special: raw.cmliussss.com is fetchable
         if "raw.cmliussss.com" in url_lower:
@@ -353,12 +322,6 @@ def classify_urls(urls: list[str]) -> list[dict]:
             fetchable = True
             expected_kind = "subscription"
         if source_type == "github_repo":
-            # Expand repo into candidate raw URLs instead of marking not fetchable
-            expanded = _expand_github_repo(url)
-            if expanded:
-                sources.extend(expanded)
-                continue
-            # If expansion fails (unlikely URL pattern), keep as not fetchable
             fetchable = False
         sources.append({
             "url": url,

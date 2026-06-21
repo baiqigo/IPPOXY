@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import re
 import time
 from pathlib import Path
 from typing import Callable
@@ -21,9 +22,15 @@ from ip_proxy_layer0_consumer import (
     fetch_text,
     parse_line,
 )
+from ip_proxy_source_registry import load_dynamic_registry_entries, load_merged_source_registry
 
 
 HTTP_SOCKS_KINDS = {"http", "https", "socks4", "socks5"}
+IP_PORT_SCAN_RE = re.compile(
+    r"(?:(http|https|socks4|socks5)://)?"
+    r"(?<!\d)((?:\d{1,3}\.){3}\d{1,3}):(\d{1,5})(?!\d)",
+    re.IGNORECASE,
+)
 SOURCE_GROUPS = (
     ("http_sources", "http", "http"),
     ("socks_sources", "socks5", "socks"),
@@ -31,10 +38,6 @@ SOURCE_GROUPS = (
     ("api_sources", "http", "api"),
 )
 FetchTextFunc = Callable[[str, int], str]
-
-
-def _read_registry(source_registry: Path) -> dict:
-    return json.loads(source_registry.read_text(encoding="utf-8-sig"))
 
 
 def _write_json(path: Path, data: object) -> None:
@@ -46,6 +49,220 @@ def _source_lane(source_type: str) -> str:
     if source_type == "subscription":
         return "subscription"
     return "http_socks"
+
+
+def _positive_int(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _valid_ip(ip: str) -> bool:
+    parts = ip.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        return all(0 <= int(part) <= 255 for part in parts)
+    except ValueError:
+        return False
+
+
+def _valid_port(port: str) -> bool:
+    try:
+        value = int(port)
+    except (TypeError, ValueError):
+        return False
+    return 1 <= value <= 65535
+
+
+def _normalise_kind(proto: str | None, default_kind: str | None) -> str | None:
+    candidate = (proto or "").lower()
+    if candidate in HTTP_SOCKS_KINDS:
+        return candidate
+    fallback = (default_kind or "").lower()
+    if fallback in HTTP_SOCKS_KINDS:
+        return fallback
+    return None
+
+
+def _make_proxy_candidate(*, ip: str, port: str, kind: str | None, source_id: str) -> dict | None:
+    if kind not in HTTP_SOCKS_KINDS:
+        return None
+    if not _valid_ip(ip) or not _valid_port(port):
+        return None
+    return {"kind": kind, "raw": f"{kind}://{ip}:{int(port)}", "source": source_id}
+
+
+def _strip_html(value: str) -> str:
+    value = re.sub(r"<script\b.*?</script>", "", value, flags=re.IGNORECASE | re.DOTALL)
+    value = re.sub(r"<style\b.*?</style>", "", value, flags=re.IGNORECASE | re.DOTALL)
+    value = re.sub(r"<[^>]+>", "", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _entry_urls(entry: dict) -> list[str]:
+    urls = entry.get("urls")
+    if isinstance(urls, list):
+        return [str(url) for url in urls if str(url).strip()]
+    url = str(entry.get("url") or "")
+    pages = _positive_int(entry.get("pages"))
+    if pages and "{page}" in url:
+        page_start = _positive_int(entry.get("page_start")) or 1
+        return [url.format(page=page) for page in range(page_start, page_start + pages)]
+    return [url] if url else []
+
+
+def _fetch_entry_text(
+    *,
+    url: str,
+    timeout: int,
+    max_bytes: int | None,
+    fetch_text_func: FetchTextFunc,
+) -> tuple[str, dict]:
+    if fetch_text_func is fetch_text:
+        raw_text = fetch_text(url, timeout, max_bytes=max_bytes)
+    else:
+        raw_text = fetch_text_func(url, timeout)
+        if max_bytes:
+            raw_text = raw_text.encode("utf-8", errors="ignore")[:max_bytes].decode("utf-8", errors="ignore")
+
+    bytes_read = len(raw_text.encode("utf-8", errors="ignore"))
+    return raw_text, {
+        "bytes_read": bytes_read,
+        "truncated_by_bytes": bool(max_bytes and bytes_read >= max_bytes),
+    }
+
+
+def _parse_text_candidates(
+    *,
+    raw_text: str,
+    source_id: str,
+    source_kind: str | None,
+    source_format: str,
+    max_lines: int | None,
+    max_candidates: int | None,
+) -> tuple[list[dict], dict]:
+    candidates: list[dict] = []
+    meta = {
+        "parser": source_format,
+        "lines_seen": 0,
+        "truncated_by_lines": False,
+        "truncated_by_candidates": False,
+    }
+
+    def append_candidate(item: dict | None) -> bool:
+        if item is None:
+            return False
+        candidates.append(item)
+        if max_candidates and len(candidates) >= max_candidates:
+            meta["truncated_by_candidates"] = True
+            return True
+        return False
+
+    if source_format in {"ip_port", "share_url", "base64_subscription"}:
+        lines = raw_text.splitlines()
+        meta["lines_seen"] = len(lines)
+        if max_lines and len(lines) > max_lines:
+            lines = lines[:max_lines]
+            meta["truncated_by_lines"] = True
+        for line in lines:
+            if append_candidate(parse_line(line, source=source_id, kind=source_kind)):
+                break
+        return candidates, meta
+
+    if source_format in {"regex_ip_port", "openproxy_space"}:
+        for index, match in enumerate(IP_PORT_SCAN_RE.finditer(raw_text), start=1):
+            meta["lines_seen"] = index
+            proto, ip, port = match.groups()
+            if append_candidate(
+                _make_proxy_candidate(
+                    ip=ip,
+                    port=port,
+                    kind=_normalise_kind(proto, source_kind),
+                    source_id=source_id,
+                )
+            ):
+                break
+        return candidates, meta
+
+    if source_format == "json_geonode":
+        data = json.loads(raw_text)
+        rows = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            raise ValueError("json_geonode response missing data list")
+        meta["lines_seen"] = len(rows)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            protocols = row.get("protocols")
+            proto = protocols[0] if isinstance(protocols, list) and protocols else source_kind
+            if append_candidate(
+                _make_proxy_candidate(
+                    ip=str(row.get("ip") or "").strip(),
+                    port=str(row.get("port") or "").strip(),
+                    kind=_normalise_kind(str(proto or ""), source_kind),
+                    source_id=source_id,
+                )
+            ):
+                break
+        return candidates, meta
+
+    if source_format == "proxifly_json":
+        rows = json.loads(raw_text)
+        if not isinstance(rows, list):
+            raise ValueError("proxifly_json response is not a list")
+        meta["lines_seen"] = len(rows)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            raw_proxy = str(row.get("proxy") or "")
+            match = IP_PORT_SCAN_RE.search(raw_proxy)
+            if match:
+                proto, ip, port = match.groups()
+                kind = _normalise_kind(str(row.get("protocol") or proto or ""), source_kind)
+            else:
+                ip = str(row.get("ip") or "").strip()
+                port = str(row.get("port") or "").strip()
+                kind = _normalise_kind(str(row.get("protocol") or ""), source_kind)
+            if append_candidate(_make_proxy_candidate(ip=ip, port=port, kind=kind, source_id=source_id)):
+                break
+        return candidates, meta
+
+    if source_format == "html_proxy_table":
+        rows = re.findall(r"<tr\b[^>]*>(.*?)</tr>", raw_text, flags=re.IGNORECASE | re.DOTALL)
+        meta["lines_seen"] = len(rows)
+        if max_lines and len(rows) > max_lines:
+            rows = rows[:max_lines]
+            meta["truncated_by_lines"] = True
+        for row in rows:
+            cells = [_strip_html(cell) for cell in re.findall(r"<td\b[^>]*>(.*?)</td>", row, flags=re.IGNORECASE | re.DOTALL)]
+            if len(cells) < 2:
+                continue
+            ip, port = cells[0], cells[1]
+            lower_cells = [cell.lower() for cell in cells]
+            proto = None
+            if any("socks4" in cell for cell in lower_cells):
+                proto = "socks4"
+            elif any("socks5" in cell for cell in lower_cells):
+                proto = "socks5"
+            elif len(cells) >= 7 and cells[6].lower() == "yes":
+                proto = "https"
+            if append_candidate(
+                _make_proxy_candidate(
+                    ip=ip,
+                    port=port,
+                    kind=_normalise_kind(proto, source_kind),
+                    source_id=source_id,
+                )
+            ):
+                break
+        return candidates, meta
+
+    raise ValueError(f"unsupported source parser: {source_format}")
 
 
 def _candidate_trace(
@@ -75,23 +292,75 @@ def _parse_source_entry(
     default_kind: str | None,
     timeout: int,
     fetch_text_func: FetchTextFunc = fetch_text,
-) -> tuple[str, list[dict]]:
+) -> tuple[str, list[dict], dict]:
     source_id = entry.get("name") or entry.get("id") or "unknown"
-    url = entry.get("url") or ""
+    urls = _entry_urls(entry)
     source_format = entry.get("type") or "ip_port"
     source_kind = entry.get("kind", default_kind)
+    source_timeout = _positive_int(entry.get("timeout")) or timeout
+    max_bytes = _positive_int(entry.get("max_bytes"))
+    max_lines = _positive_int(entry.get("max_lines"))
+    max_candidates = _positive_int(entry.get("max_candidates"))
     lane = _source_lane(source_type)
 
-    raw_text = fetch_text_func(url, timeout)
-    if source_format == "base64_subscription":
-        raw_text = decode_base64_content(raw_text)
-
     candidates: list[dict] = []
-    for line in raw_text.splitlines():
-        parsed = parse_line(line, source=source_id, kind=source_kind)
-        if parsed is None:
-            continue
-        item = dict(parsed)
+    parse_meta = {
+        "parser": source_format,
+        "bytes_read": 0,
+        "lines_seen": 0,
+        "truncated": False,
+        "truncated_by_bytes": False,
+        "truncated_by_lines": False,
+        "truncated_by_candidates": False,
+        "urls_fetched": [],
+    }
+
+    for url in urls:
+        remaining_candidates = None
+        if max_candidates:
+            remaining_candidates = max_candidates - len(candidates)
+            if remaining_candidates <= 0:
+                parse_meta["truncated_by_candidates"] = True
+                break
+
+        raw_text, fetch_meta = _fetch_entry_text(
+            url=url,
+            timeout=source_timeout,
+            max_bytes=max_bytes,
+            fetch_text_func=fetch_text_func,
+        )
+        parse_meta["urls_fetched"].append(url)
+        parse_meta["bytes_read"] += fetch_meta["bytes_read"]
+        parse_meta["truncated_by_bytes"] = parse_meta["truncated_by_bytes"] or fetch_meta["truncated_by_bytes"]
+
+        if source_format == "base64_subscription":
+            raw_text = decode_base64_content(raw_text)
+
+        parsed_candidates, item_meta = _parse_text_candidates(
+            raw_text=raw_text,
+            source_id=source_id,
+            source_kind=source_kind,
+            source_format=source_format,
+            max_lines=max_lines,
+            max_candidates=remaining_candidates,
+        )
+        candidates.extend(parsed_candidates)
+        parse_meta["lines_seen"] += int(item_meta.get("lines_seen") or 0)
+        parse_meta["truncated_by_lines"] = parse_meta["truncated_by_lines"] or bool(item_meta.get("truncated_by_lines"))
+        parse_meta["truncated_by_candidates"] = parse_meta["truncated_by_candidates"] or bool(
+            item_meta.get("truncated_by_candidates")
+        )
+        if max_candidates and len(candidates) >= max_candidates:
+            break
+
+    trace_url = entry.get("url") or (urls[0] if urls else "")
+    parse_meta["truncated"] = bool(
+        parse_meta["truncated_by_bytes"]
+        or parse_meta["truncated_by_lines"]
+        or parse_meta["truncated_by_candidates"]
+    )
+
+    for item in candidates:
         item["source_id"] = source_id
         item["source_type"] = source_type
         item["trace"] = _candidate_trace(
@@ -100,11 +369,10 @@ def _parse_source_entry(
             source_type=source_type,
             source_format=source_format,
             lane=lane,
-            url=url,
+            url=trace_url,
         )
-        candidates.append(item)
 
-    return lane, candidates
+    return lane, candidates, parse_meta
 
 
 def run_intake(
@@ -115,6 +383,9 @@ def run_intake(
     dry_run: bool,
     timeout: int = 30,
     workers: int = 8,
+    dynamic_sources: Path | None = None,
+    include_dynamic_sources: bool = False,
+    only_dynamic_sources: bool = False,
     fetch_text_func: FetchTextFunc = fetch_text,
 ) -> dict:
     """Run Layer 0 source intake and write stable artifacts.
@@ -126,12 +397,22 @@ def run_intake(
         dry_run: records mode in manifest; does not change runtime behavior.
         timeout: fetch timeout per source.
         workers: concurrent source fetch workers.
+        dynamic_sources: optional dynamic_sources.json produced by discovery.
+        include_dynamic_sources: merge dynamic fetchable sources into the registry.
+        only_dynamic_sources: ignore curated registry entries and run only dynamic fetchable sources.
         fetch_text_func: injectable fetcher for tests or alternate transports.
 
     Returns:
         Manifest dict matching the on-disk manifest artifact.
     """
-    config = _read_registry(source_registry)
+    if only_dynamic_sources:
+        config = load_dynamic_registry_entries(dynamic_sources)
+    else:
+        config = load_merged_source_registry(
+            source_registry,
+            dynamic_path=dynamic_sources,
+            include_dynamic=include_dynamic_sources,
+        )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     http_socks: list[dict] = []
@@ -151,7 +432,7 @@ def run_intake(
         source_id = entry.get("name") or entry.get("id") or "unknown"
         lane = _source_lane(source_type)
         try:
-            lane, candidates = _parse_source_entry(
+            lane, candidates, parse_meta = _parse_source_entry(
                 entry=entry,
                 run_id=run_id,
                 source_type=source_type,
@@ -163,6 +444,7 @@ def run_intake(
             error = None
         except Exception as exc:
             candidates = []
+            parse_meta = {}
             status = "error"
             error = repr(exc)
         error_entry = None
@@ -185,6 +467,22 @@ def run_intake(
             "raw_count": len(candidates),
             "status": status,
         }
+        if parse_meta:
+            source_trace.update(
+                {
+                    "parser": parse_meta.get("parser"),
+                    "bytes_read": parse_meta.get("bytes_read", 0),
+                    "lines_seen": parse_meta.get("lines_seen", 0),
+                    "truncated": parse_meta.get("truncated", False),
+                    "truncated_by_bytes": parse_meta.get("truncated_by_bytes", False),
+                    "truncated_by_lines": parse_meta.get("truncated_by_lines", False),
+                    "truncated_by_candidates": parse_meta.get("truncated_by_candidates", False),
+                    "urls_fetched": parse_meta.get("urls_fetched", []),
+                    "max_bytes": _positive_int(entry.get("max_bytes")),
+                    "max_lines": _positive_int(entry.get("max_lines")),
+                    "max_candidates": _positive_int(entry.get("max_candidates")),
+                }
+            )
         if error is not None:
             source_trace["error"] = error
         return index, lane, candidates, source_trace, error_entry
@@ -219,6 +517,9 @@ def run_intake(
         "run_id": run_id,
         "dry_run": bool(dry_run),
         "source_registry": str(source_registry),
+        "dynamic_sources": str(dynamic_sources) if dynamic_sources else "",
+        "include_dynamic_sources": bool(include_dynamic_sources),
+        "only_dynamic_sources": bool(only_dynamic_sources),
         "manifest_path": str(manifest_path),
         "lanes": {
             "http_socks": {
@@ -251,6 +552,9 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="record dry-run mode and avoid runtime side effects")
     parser.add_argument("--timeout", type=int, default=30, help="fetch timeout per source")
     parser.add_argument("--workers", type=int, default=8, help="concurrent source fetch workers")
+    parser.add_argument("--dynamic-sources", type=Path, default=None, help="dynamic_sources.json from source discovery")
+    parser.add_argument("--no-dynamic-sources", action="store_true", help="do not merge discovered dynamic sources")
+    parser.add_argument("--only-dynamic-sources", action="store_true", help="ignore curated registry and fetch only dynamic sources")
     args = parser.parse_args()
 
     run_id = args.run_id or time.strftime("%Y%m%d_%H%M%S")
@@ -261,6 +565,9 @@ def main() -> int:
         dry_run=args.dry_run,
         timeout=args.timeout,
         workers=args.workers,
+        dynamic_sources=args.dynamic_sources,
+        include_dynamic_sources=not args.no_dynamic_sources,
+        only_dynamic_sources=args.only_dynamic_sources,
     )
     print(json.dumps(manifest, ensure_ascii=False))
     return 0

@@ -23,24 +23,18 @@ import subprocess
 from collections import Counter
 from pathlib import Path
 
+from ip_proxy_source_registry import (
+    DEFAULT_DYNAMIC_SOURCES,
+    DEFAULT_SOURCE_REGISTRY,
+    candidate_source_entries,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 IP_RUNTIME_DIR = Path(os.environ.get("IP_PROXY_RUNTIME_DIR", ROOT / ".runtime/ip-proxy"))
 RUNTIME_DIR = IP_RUNTIME_DIR / "research"
 RESIN_DIR = IP_RUNTIME_DIR / "resin"
 DEFAULT_SOURCE_QUALITY = RUNTIME_DIR / "proxy_source_quality_latest.json"
-SOURCES = {
-    "cmliussss_vpngate": "https://sub.cmliussss.net/vpngate",
-    "delta_vpn_gate": "https://raw.githubusercontent.com/Delta-Kronecker/Vpn-Gate/refs/heads/main/sstp_hosts.txt",
-    "vpngate_official_api": "https://www.vpngate.net/api/iphone/",
-    "f0rc3run_sstp": "https://raw.githubusercontent.com/F0rc3Run/F0rc3Run/refs/heads/main/sstp-configs/sstp_with_country.txt",
-    "toicf_turn_results": "https://raw.githubusercontent.com/ToiCF/CF-Workers-TURN/main/turn_results.txt",
-    "cmliu_socks5api": "https://raw.githubusercontent.com/cmliu/Socks2Vlesssub/main/socks5api.txt",
-    "cmliu_worker_socks5": "https://raw.githubusercontent.com/cmliu/WorkerVless2sub/main/socks5Data",
-    "proxifly_socks5": "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt",
-    "proxyscrape_socks5": "https://api.proxyscrape.com/v4/free-proxy-list/get?protocol=socks5&format=txt&timeout=10000&country=all",
-    "speedx_socks5": "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
-}
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
     "Accept": "application/json,text/plain,*/*",
@@ -76,11 +70,17 @@ def _fetch_curl(url: str, timeout: int = 30) -> str:
     return result.stdout.decode("utf-8", errors="ignore")
 
 
-def safe_fetch_text(source: str, timeout: int = 30) -> str:
+def source_name(entry: dict) -> str:
+    return str(entry.get("name") or entry.get("id") or "unknown")
+
+
+def safe_fetch_entry(entry: dict, timeout: int = 30) -> str:
+    name = source_name(entry)
+    url = str(entry.get("url") or "")
     try:
-        return fetch_text(SOURCES[source], timeout=timeout)
+        return fetch_text(url, timeout=timeout)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        print(json.dumps({"source": source, "error": repr(exc)}, ensure_ascii=False))
+        print(json.dumps({"source": name, "url": url, "error": repr(exc)}, ensure_ascii=False))
         return ""
 
 
@@ -129,8 +129,7 @@ def normalize_opengw_host(host: str) -> str:
     return host
 
 
-def load_vpngate_official(candidates: list[dict]) -> None:
-    text = safe_fetch_text("vpngate_official_api")
+def load_vpngate_official(candidates: list[dict], text: str, source: str) -> None:
     lines = [line for line in text.splitlines() if line and not line.startswith("*") and not line.startswith("#")]
     if not lines:
         return
@@ -142,11 +141,10 @@ def load_vpngate_official(candidates: list[dict]) -> None:
     for row in reader:
         host = normalize_opengw_host(row.get("HostName") or "")
         if host and ("opengw.net" in host or host.startswith("public-vpn-")):
-            add_candidate(candidates, "sstp", f"sstp://vpn:vpn@{host}:443", "vpngate_official_api")
+            add_candidate(candidates, "sstp", f"sstp://vpn:vpn@{host}:443", source)
 
 
-def load_f0rc3run_sstp(candidates: list[dict]) -> None:
-    text = safe_fetch_text("f0rc3run_sstp")
+def load_f0rc3run_sstp(candidates: list[dict], text: str, source: str) -> None:
     for line in text.splitlines():
         s = line.strip()
         if not s or s.startswith("#"):
@@ -156,11 +154,10 @@ def load_f0rc3run_sstp(candidates: list[dict]) -> None:
         if "opengw.net" in s:
             if not s.startswith("sstp://"):
                 s = "sstp://vpn:vpn@" + s
-            add_candidate(candidates, "sstp", s, "f0rc3run_sstp")
+            add_candidate(candidates, "sstp", s, source)
 
 
-def load_toicf_turn(candidates: list[dict]) -> None:
-    text = safe_fetch_text("toicf_turn_results")
+def load_toicf_turn(candidates: list[dict], text: str, source: str) -> None:
     for line in text.splitlines():
         s = line.strip()
         if not s or s.startswith("#"):
@@ -179,67 +176,78 @@ def load_toicf_turn(candidates: list[dict]) -> None:
             raw = f"turn://{cred.group(1)}:{cred.group(2)}@{hostport}"
         else:
             raw = f"turn://{hostport}"
-        add_candidate(candidates, "turn", raw, "toicf_turn_results")
+        add_candidate(candidates, "turn", raw, source)
 
 
-def load_socks_sources(candidates: list[dict], max_per_source: int) -> None:
-    for source in [
-        "cmliu_socks5api",
-        "cmliu_worker_socks5",
-        "proxifly_socks5",
-        "proxyscrape_socks5",
-        "speedx_socks5",
-    ]:
-        text = safe_fetch_text(source)
-        added = 0
-        for line in text.splitlines():
-            if add_socks5_line(candidates, line, source):
-                added += 1
-                if added >= max_per_source:
-                    break
+def load_socks_lines(candidates: list[dict], text: str, source: str, max_per_source: int) -> None:
+    added = 0
+    for line in text.splitlines():
+        if add_socks5_line(candidates, line, source):
+            added += 1
+            if added >= max_per_source:
+                break
 
 
-def load_candidates() -> list[dict]:
-    candidates: list[dict] = []
-
-    cmliussss = safe_fetch_text("cmliussss_vpngate")
-    for blob in maybe_decode_base64(cmliussss):
+def load_sstp_generic(candidates: list[dict], text: str, source: str) -> None:
+    for blob in maybe_decode_base64(text):
         for m in re.finditer(r"sstp://[^\s\r\n]+", blob):
-            add_candidate(candidates, "sstp", m.group(0), "cmliussss_vpngate")
+            add_candidate(candidates, "sstp", m.group(0), source)
         for line in blob.splitlines():
             s = line.strip()
             if s and (s.endswith(".opengw.net") or "opengw.net:" in s):
                 if not s.startswith("sstp://"):
                     s = "sstp://vpn:vpn@" + s
-                add_candidate(candidates, "sstp", s, "cmliussss_vpngate")
+                add_candidate(candidates, "sstp", s, source)
 
-    delta = safe_fetch_text("delta_vpn_gate")
-    for line in delta.splitlines():
-        s = line.strip()
-        if not s or s.startswith("#"):
-            continue
-        if "opengw.net" in s or re.match(r"^[A-Za-z0-9.-]+:\d+$", s):
-            if not s.startswith("sstp://"):
-                s = "sstp://vpn:vpn@" + s
-            add_candidate(candidates, "sstp", s, "delta_vpn_gate")
 
-    load_vpngate_official(candidates)
-    load_f0rc3run_sstp(candidates)
-    load_toicf_turn(candidates)
+def load_turn_generic(candidates: list[dict], text: str, source: str) -> None:
+    for m in re.finditer(r"turn://[^\s\r\n]+", text):
+        add_candidate(candidates, "turn", m.group(0).rstrip(".,)"), source)
+    load_toicf_turn(candidates, text, source)
 
-    for path in [
-        ROOT / "docs/ip-proxy/research/cmliussss_sstp_turn_plan_20260606.md",
-        ROOT / "docs/ip-proxy/research/runtime/turn_check_20260606_223018.md",
-    ]:
-        if not path.exists():
-            continue
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        for m in re.finditer(r"turn://[^\s`|]+", text):
-            add_candidate(candidates, "turn", m.group(0).rstrip(".,)"), path.name)
 
-    load_socks_sources(candidates, load_candidates.max_socks_per_source)
+def load_candidate_source(candidates: list[dict], entry: dict, *, max_socks_per_source: int) -> None:
+    source = source_name(entry)
+    source_type = str(entry.get("type") or "")
+    text = safe_fetch_entry(entry)
+    if not text:
+        return
 
-    load_dynamic_sources(candidates)
+    if source_type in {"sstp_cmliussss", "sstp_generic"}:
+        load_sstp_generic(candidates, text, source)
+    elif source_type == "sstp_hosts":
+        for line in text.splitlines():
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            if "opengw.net" in s or re.match(r"^[A-Za-z0-9.-]+:\d+$", s):
+                if not s.startswith("sstp://"):
+                    s = "sstp://vpn:vpn@" + s
+                add_candidate(candidates, "sstp", s, source)
+    elif source_type == "vpngate_official":
+        load_vpngate_official(candidates, text, source)
+    elif source_type == "sstp_f0rc3run":
+        load_f0rc3run_sstp(candidates, text, source)
+    elif source_type in {"turn_results", "turn_generic"}:
+        load_turn_generic(candidates, text, source)
+    elif source_type == "socks5_lines":
+        load_socks_lines(candidates, text, source, max_socks_per_source)
+
+
+def load_candidates(
+    *,
+    source_registry: Path = DEFAULT_SOURCE_REGISTRY,
+    dynamic_sources: Path = DEFAULT_DYNAMIC_SOURCES,
+    include_dynamic_sources: bool = True,
+    max_socks_per_source: int = 200,
+) -> list[dict]:
+    candidates: list[dict] = []
+    for entry in candidate_source_entries(
+        source_registry,
+        dynamic_path=dynamic_sources,
+        include_dynamic=include_dynamic_sources,
+    ):
+        load_candidate_source(candidates, entry, max_socks_per_source=max_socks_per_source)
 
     dedup: list[dict] = []
     seen: set[str] = set()
@@ -290,68 +298,6 @@ def load_extra_candidate_pools(paths: list[Path]) -> list[dict]:
             if isinstance(item, dict):
                 candidates.append(dict(item))
     return normalize_candidate_rows(candidates)
-
-
-def load_dynamic_sources(candidates: list[dict]) -> None:
-    """Load supplementary sources from dynamic_sources.json (written by ip_grok_source_discovery.py)."""
-    dynamic_path = RUNTIME_DIR / "dynamic_sources.json"
-    if not dynamic_path.exists():
-        return
-    try:
-        data = json.loads(dynamic_path.read_text(encoding="utf-8-sig"))
-    except (json.JSONDecodeError, OSError):
-        return
-    sources = data.get("sources") or []
-    if not sources:
-        return
-    static_urls = set(SOURCES.values())
-    for entry in sources:
-        url = entry.get("url", "")
-        if not url or url in static_urls or not entry.get("fetchable"):
-            continue
-        expected_kind = entry.get("expected_kind", "unknown")
-        source_name = f"grok_dynamic_{entry.get('source_type', 'unknown')}"
-        try:
-            text = fetch_text(url, timeout=20)
-        except (OSError, TimeoutError) as exc:
-            print(json.dumps({"source": source_name, "url": url, "error": repr(exc)}, ensure_ascii=False))
-            continue
-        if expected_kind == "sstp":
-            for blob in maybe_decode_base64(text):
-                for m in re.finditer(r"sstp://[^\s\r\n]+", blob):
-                    add_candidate(candidates, "sstp", m.group(0), source_name)
-                for line in blob.splitlines():
-                    s = line.strip()
-                    if s and ("opengw.net" in s or re.match(r"^[A-Za-z0-9.-]+:\d+$", s)):
-                        if not s.startswith("sstp://"):
-                            s = "sstp://vpn:vpn@" + s
-                        add_candidate(candidates, "sstp", s, source_name)
-        elif expected_kind == "turn":
-            for line in text.splitlines():
-                s = line.strip()
-                if not s or s.startswith("#"):
-                    continue
-                m = re.match(r"^([A-Za-z0-9.-]+:\d+)", s)
-                if m:
-                    cred = re.search(r"CRED\(([^:()\s]+):([^()\s]+)\)", s)
-                    raw = f"turn://{cred.group(1)}:{cred.group(2)}@{m.group(1)}" if cred else f"turn://{m.group(1)}"
-                    add_candidate(candidates, "turn", raw, source_name)
-        elif expected_kind == "socks5":
-            for line in text.splitlines():
-                add_socks5_line(candidates, line, source_name)
-        elif expected_kind == "subscription":
-            for blob in maybe_decode_base64(text):
-                for proto in ["vmess", "vless", "trojan", "ss"]:
-                    for m in re.finditer(rf"{proto}://[^\s\r\n]+", blob):
-                        add_candidate(candidates, proto, m.group(0), source_name)
-        else:
-            # Unknown kind: try generic socks5/turn/sstp extraction
-            for line in text.splitlines():
-                add_socks5_line(candidates, line, source_name)
-            for m in re.finditer(r"turn://[^\s\r\n]+", text):
-                add_candidate(candidates, "turn", m.group(0), source_name)
-            for m in re.finditer(r"sstp://[^\s\r\n]+", text):
-                add_candidate(candidates, "sstp", m.group(0), source_name)
 
 
 def safe_int(value: object) -> int:
@@ -748,6 +694,9 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=18)
     parser.add_argument("--harvest-only", action="store_true")
     parser.add_argument("--max-socks-per-source", type=int, default=200)
+    parser.add_argument("--source-registry", type=Path, default=DEFAULT_SOURCE_REGISTRY)
+    parser.add_argument("--dynamic-sources", type=Path, default=DEFAULT_DYNAMIC_SOURCES)
+    parser.add_argument("--no-dynamic-sources", action="store_true")
     parser.add_argument("--max-check", type=int, default=0, help="limit checked candidates after sorting; 0 means all")
     parser.add_argument("--max-check-per-source", type=int, default=int(os.environ.get("IP_PROXY_MAX_CHECK_PER_SOURCE", "0")))
     parser.add_argument(
@@ -801,9 +750,13 @@ def main() -> int:
     elif not FETCH_PROXY:
         FETCH_PROXY = None
 
-    load_candidates.max_socks_per_source = args.max_socks_per_source
     only_kinds = set(args.only_kind or [])
-    candidates = [] if args.skip_default_sources else load_candidates()
+    candidates = [] if args.skip_default_sources else load_candidates(
+        source_registry=args.source_registry,
+        dynamic_sources=args.dynamic_sources,
+        include_dynamic_sources=not args.no_dynamic_sources,
+        max_socks_per_source=args.max_socks_per_source,
+    )
     if args.extra_candidate_pool:
         candidates.extend(load_extra_candidate_pools(args.extra_candidate_pool))
         candidates = normalize_candidate_rows(candidates)

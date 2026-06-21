@@ -123,6 +123,144 @@ def test_raw_pool_mode_promotes_checked_http_socks_and_l3_candidates(tmp_path):
     }
 
 
+def test_raw_non_dry_run_requires_sandbox_live_candidates_by_default(tmp_path):
+    input_path = tmp_path / "runtime/resin/all_candidates_classified.latest.json"
+    baseline_path = tmp_path / "baseline.json"
+    source_quality_path = tmp_path / "source_quality.json"
+    rows = [
+        {
+            "kind": "http",
+            "raw": "http://203.0.113.10:8080",
+            "success": True,
+            "registration_tier": "clean",
+            "dirty": [],
+            "exit_ip": "198.51.100.10",
+            "country": "US",
+            "company": "External Checker Only",
+            "responseTime": 120,
+        }
+    ]
+    write_json(input_path, rows)
+    write_json(baseline_path, [])
+    write_json(source_quality_path, {"by_source": {}})
+
+    env = {
+        **os.environ,
+        "IPPOXY_ROOT": str(tmp_path / "root"),
+        "IP_PROXY_RUNTIME_DIR": str(tmp_path / "runtime"),
+    }
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools/ip_proxy_pool_refresh.py"),
+            "--input",
+            str(input_path),
+            "--baseline",
+            str(baseline_path),
+            "--source-quality",
+            str(source_quality_path),
+            "--verify",
+            str(tmp_path / "missing_verify.json"),
+            "--registrar-feedback",
+            str(tmp_path / "missing_feedback.json"),
+            "--pool-mode",
+            "raw",
+            "--limit",
+            "1",
+            "--min-clean",
+            "1",
+            "--min-new-candidates",
+            "1",
+            "--max-fallback-candidate-age-hours",
+            "0",
+            "--allow-selection-quality-failures",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+
+    assert proc.returncode == 2, proc.stdout
+    result = json.loads(proc.stdout)
+    assert result["status"] == "skipped"
+    assert result["reason"] == "not_enough_clean_candidates"
+    assert result["sandbox_live_filter"] == {
+        "require_sandbox_live": True,
+        "before_filter": 1,
+        "after_filter": 0,
+        "excluded_not_sandbox_live": 1,
+    }
+
+
+def test_raw_non_dry_run_accepts_sandbox_live_candidates(tmp_path):
+    input_path = tmp_path / "runtime/resin/all_candidates_classified.latest.json"
+    baseline_path = tmp_path / "baseline.json"
+    source_quality_path = tmp_path / "source_quality.json"
+    rows = [
+        {
+            "kind": "http",
+            "raw": "http://203.0.113.10:8080",
+            "success": True,
+            "registration_tier": "clean",
+            "dirty": [],
+            "exit_ip": "198.51.100.10",
+            "trace_ip": "198.51.100.10",
+            "checked_from": "sandbox",
+            "country": "US",
+            "company": "Sandbox Live",
+            "responseTime": 120,
+        }
+    ]
+    write_json(input_path, rows)
+    write_json(baseline_path, [])
+    write_json(source_quality_path, {"by_source": {}})
+
+    env = {
+        **os.environ,
+        "IPPOXY_ROOT": str(tmp_path / "root"),
+        "IP_PROXY_RUNTIME_DIR": str(tmp_path / "runtime"),
+    }
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools/ip_proxy_pool_refresh.py"),
+            "--input",
+            str(input_path),
+            "--baseline",
+            str(baseline_path),
+            "--source-quality",
+            str(source_quality_path),
+            "--verify",
+            str(tmp_path / "missing_verify.json"),
+            "--registrar-feedback",
+            str(tmp_path / "missing_feedback.json"),
+            "--pool-mode",
+            "raw",
+            "--limit",
+            "1",
+            "--min-clean",
+            "1",
+            "--min-new-candidates",
+            "1",
+            "--max-fallback-candidate-age-hours",
+            "0",
+            "--allow-selection-quality-failures",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    result = json.loads(proc.stdout)
+    assert result["status"] == "ok"
+    assert result["sandbox_live_filter"]["after_filter"] == 1
+
+
 def test_runtime_config_routes_direct_proxy_candidates_without_turn_wrapper():
     from ip_proxy_pool_refresh import normalize_row, xray_config
 

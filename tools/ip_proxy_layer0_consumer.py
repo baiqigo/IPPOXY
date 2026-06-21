@@ -32,7 +32,7 @@ FETCH_PROXY: str | None = os.environ.get("IP_PROXY_FETCH_PROXY") or None
 DEFAULT_SOURCES_CONFIG = ROOT / "tools" / "layer0_sources.json"
 
 
-def fetch_text(url: str, timeout: int = 30) -> str:
+def fetch_text(url: str, timeout: int = 30, max_bytes: int | None = None) -> str:
     """Fetch text content from URL, with optional proxy support."""
     if url.startswith("file://"):
         # Windows-compatible local file reading
@@ -42,17 +42,23 @@ def fetch_text(url: str, timeout: int = 30) -> str:
         # On Windows, file:///C:/... -> /C:/... -> C:/...
         if len(path) >= 3 and path[0] == '/' and path[2] == ':':
             path = path[1:]
+        if max_bytes and max_bytes > 0:
+            return Path(path).read_bytes()[:max_bytes].decode("utf-8", errors="ignore")
         return Path(path).read_text(encoding="utf-8", errors="ignore")
     if FETCH_PROXY:
-        return _fetch_curl(url, timeout)
+        return _fetch_curl(url, timeout, max_bytes=max_bytes)
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
+        if max_bytes and max_bytes > 0:
+            return resp.read(max_bytes).decode("utf-8", errors="ignore")
         return resp.read().decode("utf-8", errors="ignore")
 
 
-def _fetch_curl(url: str, timeout: int = 30) -> str:
+def _fetch_curl(url: str, timeout: int = 30, max_bytes: int | None = None) -> str:
     import subprocess
     cmd = ["curl", "-sS", "--max-time", str(timeout), "-x", FETCH_PROXY, url]
+    if max_bytes and max_bytes > 0:
+        cmd[1:1] = ["--range", f"0-{max_bytes - 1}"]
     result = subprocess.run(cmd, capture_output=True, timeout=timeout + 10)
     if result.returncode != 0:
         raise OSError(f"curl failed (rc={result.returncode})")
@@ -84,9 +90,15 @@ def parse_line(line: str, *, source: str, kind: str | None = None) -> dict | Non
                 detected_kind = "hy2"
             return {"kind": detected_kind, "raw": line, "source": source}
 
-    # Full URL format: http://ip:port or socks5://ip:port
-    if "://" in line and kind:
-        return {"kind": kind, "raw": line, "source": source}
+    # Full URL format: http://ip:port or socks5://ip:port. Prefer the line's
+    # explicit protocol over the source default because dynamic sources can be
+    # mixed or imperfectly classified.
+    if "://" in line:
+        detected_kind = line.split("://", 1)[0].lower()
+        if detected_kind in {"http", "https", "socks4", "socks5"}:
+            return {"kind": detected_kind, "raw": line, "source": source}
+        if kind:
+            return {"kind": kind, "raw": line, "source": source}
 
     # ip:port format
     if IP_PORT_RE.match(line) and kind:

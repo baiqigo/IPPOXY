@@ -428,6 +428,38 @@ def filter_candidates(
     }
 
 
+def is_sandbox_live_candidate(item: dict) -> bool:
+    if bool(item.get("sandbox_live")) and item.get("success"):
+        return True
+    checked_from = str(item.get("checked_from") or item.get("live_checked_from") or "").lower()
+    if checked_from in {"sandbox", "daytona", "daytona_sandbox"} and item.get("success"):
+        return bool(item.get("trace_ip") or item.get("exit_ip"))
+    live_check = item.get("live_check")
+    if isinstance(live_check, dict):
+        source = str(live_check.get("checked_from") or live_check.get("environment") or "").lower()
+        ok = bool(live_check.get("success") or live_check.get("ok") or live_check.get("live"))
+        if source in {"sandbox", "daytona", "daytona_sandbox"} and ok:
+            return bool(live_check.get("trace_ip") or live_check.get("exit_ip") or item.get("exit_ip"))
+    return False
+
+
+def filter_sandbox_live_candidates(candidates: list[dict], require_sandbox_live: bool) -> tuple[list[dict], dict]:
+    if not require_sandbox_live:
+        return candidates, {
+            "require_sandbox_live": False,
+            "before_filter": len(candidates),
+            "after_filter": len(candidates),
+            "excluded_not_sandbox_live": 0,
+        }
+    out = [item for item in candidates if is_sandbox_live_candidate(item)]
+    return out, {
+        "require_sandbox_live": True,
+        "before_filter": len(candidates),
+        "after_filter": len(out),
+        "excluded_not_sandbox_live": len(candidates) - len(out),
+    }
+
+
 def clean_turn_candidates(path: Path) -> list[dict]:
     return turn_candidates(path, "strict")
 
@@ -1132,6 +1164,18 @@ def main() -> int:
     parser.add_argument("--write-docs", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="compute the refresh result without modifying runtime files")
     parser.add_argument(
+        "--require-sandbox-live-candidates",
+        action="store_true",
+        default=os.environ.get("IP_PROXY_REQUIRE_SANDBOX_LIVE_CANDIDATES", "").strip().lower() in ("1", "true", "yes", "on"),
+        help="only promote candidates with sandbox-side live proof into runtime",
+    )
+    parser.add_argument(
+        "--allow-external-checker-candidates",
+        action="store_true",
+        default=os.environ.get("IP_PROXY_ALLOW_EXTERNAL_CHECKER_CANDIDATES", "").strip().lower() in ("1", "true", "yes", "on"),
+        help="allow non-dry-run raw apply from external-checker-only candidates; unsafe unless explicitly acknowledged",
+    )
+    parser.add_argument(
         "--allow-retain-bad-exits",
         action="store_true",
         default=os.environ.get("IP_PROXY_ALLOW_RETAIN_BAD_EXITS", "0").strip().lower() in ("1", "true", "yes", "on"),
@@ -1145,6 +1189,13 @@ def main() -> int:
     )
     args = parser.parse_args()
     apply_pool_mode_defaults(args)
+    if (
+        args.pool_mode == "raw"
+        and not args.dry_run
+        and not args.allow_external_checker_candidates
+        and "IP_PROXY_REQUIRE_SANDBOX_LIVE_CANDIDATES" not in os.environ
+    ):
+        args.require_sandbox_live_candidates = True
     if args.input is None:
         args.input = default_input_for_pool_mode(args.pool_mode)
 
@@ -1163,6 +1214,7 @@ def main() -> int:
         split_csv_values(args.exclude_country),
         args.max_response_time,
     )
+    candidates, sandbox_live_filter = filter_sandbox_live_candidates(candidates, args.require_sandbox_live_candidates)
     if len(candidates) < args.min_clean:
         print(
             json.dumps(
@@ -1174,6 +1226,7 @@ def main() -> int:
                     "min_clean": args.min_clean,
                     "fallback_reason": fallback_reason,
                     "candidate_input_audit": candidate_input_audit,
+                    "sandbox_live_filter": sandbox_live_filter,
                     "pool_mode": args.pool_mode,
                     "exclude_country": args.exclude_country,
                     "max_response_time": args.max_response_time,
@@ -1219,6 +1272,7 @@ def main() -> int:
             "registrar_feedback": str(args.registrar_feedback),
             "source_quality": source_quality_meta,
             "candidate_input_audit": candidate_input_audit,
+            "sandbox_live_filter": sandbox_live_filter,
             "pool_mode": args.pool_mode,
             "exclude_country": args.exclude_country,
             "max_response_time": args.max_response_time,
@@ -1254,6 +1308,7 @@ def main() -> int:
             "registrar_feedback": str(args.registrar_feedback),
             "source_quality": source_quality_meta,
             "candidate_input_audit": candidate_input_audit,
+            "sandbox_live_filter": sandbox_live_filter,
             "pool_mode": args.pool_mode,
             "exclude_country": args.exclude_country,
             "max_response_time": args.max_response_time,
@@ -1288,6 +1343,7 @@ def main() -> int:
         "registrar_feedback": str(args.registrar_feedback),
         "source_quality": source_quality_meta,
         "candidate_input_audit": candidate_input_audit,
+        "sandbox_live_filter": sandbox_live_filter,
         "pool_mode": args.pool_mode,
         "exclude_country": args.exclude_country,
         "max_response_time": args.max_response_time,

@@ -159,6 +159,67 @@ def test_intake_records_bad_source_error_evidence(tmp_path):
     ]
 
 
+def test_intake_can_run_only_dynamic_sources(tmp_path):
+    from ip_proxy_layer0_intake import run_intake
+
+    static_file = tmp_path / "static-http.txt"
+    static_file.write_text("203.0.113.10:8080\n", encoding="utf-8")
+    dynamic_file = tmp_path / "dynamic-socks5.txt"
+    dynamic_file.write_text("198.51.100.20:1080\n", encoding="utf-8")
+
+    registry = tmp_path / "layer0_sources.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "http_sources": [
+                    {
+                        "name": "static_http",
+                        "url": static_file.as_uri(),
+                        "kind": "http",
+                        "type": "ip_port",
+                    }
+                ],
+                "socks_sources": [],
+                "subscription_sources": [],
+                "api_sources": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    dynamic_sources = tmp_path / "dynamic_sources.json"
+    dynamic_sources.write_text(
+        json.dumps(
+            {
+                "sources": [
+                    {
+                        "url": dynamic_file.as_uri(),
+                        "source_type": "socks_subscription",
+                        "expected_kind": "socks5",
+                        "fetchable": True,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = run_intake(
+        source_registry=registry,
+        output_dir=tmp_path / "out",
+        run_id="dynamic-only",
+        dry_run=True,
+        timeout=1,
+        dynamic_sources=dynamic_sources,
+        include_dynamic_sources=True,
+        only_dynamic_sources=True,
+    )
+
+    raw = json.loads(Path(manifest["lanes"]["http_socks"]["raw_path"]).read_text(encoding="utf-8"))
+    assert [item["raw"] for item in raw] == ["socks5://198.51.100.20:1080"]
+    assert manifest["lanes"]["http_socks"]["sources"] == [raw[0]["source_id"]]
+    assert manifest["only_dynamic_sources"] is True
+
+
 def test_intake_dry_run_does_not_update_latest_aliases(tmp_path):
     from ip_proxy_layer0_intake import run_intake
 
@@ -256,3 +317,158 @@ def test_intake_fetches_sources_concurrently(tmp_path):
 
     assert manifest["lanes"]["http_socks"]["raw_count"] == 4
     assert max_active > 1
+
+
+def test_intake_applies_source_bounds_and_records_truncation(tmp_path):
+    from ip_proxy_layer0_intake import run_intake
+
+    source_file = tmp_path / "huge.txt"
+    source_file.write_text(
+        "\n".join(
+            [
+                "203.0.113.1:8001",
+                "203.0.113.2:8002",
+                "203.0.113.3:8003",
+                "203.0.113.4:8004",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    registry = tmp_path / "layer0_sources.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "http_sources": [
+                    {
+                        "name": "bounded_http",
+                        "url": source_file.as_uri(),
+                        "kind": "http",
+                        "type": "ip_port",
+                        "max_lines": 3,
+                        "max_candidates": 2,
+                    }
+                ],
+                "socks_sources": [],
+                "subscription_sources": [],
+                "api_sources": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = run_intake(
+        source_registry=registry,
+        output_dir=tmp_path / "out",
+        run_id="bounded",
+        dry_run=True,
+        timeout=1,
+        workers=1,
+    )
+
+    trace = manifest["sources"][0]
+    assert trace["raw_count"] == 2
+    assert trace["lines_seen"] == 4
+    assert trace["truncated"] is True
+    assert trace["truncated_by_lines"] is True
+    assert trace["truncated_by_candidates"] is True
+    assert trace["max_lines"] == 3
+    assert trace["max_candidates"] == 2
+
+
+def test_intake_parses_geonode_json(tmp_path):
+    from ip_proxy_layer0_intake import run_intake
+
+    geonode_file = tmp_path / "geonode.json"
+    geonode_file.write_text(
+        json.dumps(
+            {
+                "data": [
+                    {"ip": "203.0.113.10", "port": "8080", "protocols": ["http"]},
+                    {"ip": "198.51.100.20", "port": "1080", "protocols": ["socks5"]},
+                    {"ip": "999.51.100.20", "port": "1080", "protocols": ["socks5"]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry = tmp_path / "layer0_sources.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "http_sources": [],
+                "socks_sources": [],
+                "subscription_sources": [],
+                "api_sources": [
+                    {
+                        "name": "geonode_fixture",
+                        "url": geonode_file.as_uri(),
+                        "kind": "http",
+                        "type": "json_geonode",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = run_intake(
+        source_registry=registry,
+        output_dir=tmp_path / "out",
+        run_id="geonode",
+        dry_run=True,
+        timeout=1,
+        workers=1,
+    )
+
+    raw = json.loads(Path(manifest["lanes"]["http_socks"]["raw_path"]).read_text(encoding="utf-8"))
+    assert [item["raw"] for item in raw] == ["http://203.0.113.10:8080", "socks5://198.51.100.20:1080"]
+    assert manifest["sources"][0]["parser"] == "json_geonode"
+    assert manifest["sources"][0]["lines_seen"] == 3
+
+
+def test_intake_parses_free_proxy_html_table(tmp_path):
+    from ip_proxy_layer0_intake import run_intake
+
+    html_file = tmp_path / "free-proxy.html"
+    html_file.write_text(
+        """
+        <table id="list"><tbody>
+          <tr><td>203.0.113.11</td><td>8080</td><td>US</td><td>United States</td><td>elite proxy</td><td>no</td><td>yes</td></tr>
+          <tr><td>198.51.100.22</td><td>1080</td><td>DE</td><td>Germany</td><td>Socks5</td><td>elite proxy</td></tr>
+        </tbody></table>
+        """,
+        encoding="utf-8",
+    )
+    registry = tmp_path / "layer0_sources.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "http_sources": [
+                    {
+                        "name": "html_fixture",
+                        "url": html_file.as_uri(),
+                        "kind": "http",
+                        "type": "html_proxy_table",
+                    }
+                ],
+                "socks_sources": [],
+                "subscription_sources": [],
+                "api_sources": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = run_intake(
+        source_registry=registry,
+        output_dir=tmp_path / "out",
+        run_id="html",
+        dry_run=True,
+        timeout=1,
+        workers=1,
+    )
+
+    raw = json.loads(Path(manifest["lanes"]["http_socks"]["raw_path"]).read_text(encoding="utf-8"))
+    assert [item["raw"] for item in raw] == ["https://203.0.113.11:8080", "socks5://198.51.100.22:1080"]
+    assert manifest["sources"][0]["parser"] == "html_proxy_table"

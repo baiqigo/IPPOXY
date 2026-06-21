@@ -1,0 +1,22 @@
+# IPPOXY Grok source discovery queries.
+# Keep these as search prompts, not hardcoded source URLs.
+free public http proxy list raw txt github updated
+free socks5 proxy list raw github updated
+free proxy list api json ip port recent checked
+public proxy pool fetcher sources github python free proxy
+site:github.com free proxy list http socks5 raw txt
+site:raw.githubusercontent.com proxy list socks5 http txt
+site:github.com proxy_pool fetcher sources free proxy
+site:github.com "free-proxy-list" "http.txt" "socks5.txt"
+site:github.com "proxy-list" "proxies/protocols/http/data.txt"
+site:github.com "proxylist" "lastChecked" "protocols"
+site:github.com "OpenGW" "sstp_hosts.txt"
+site:github.com "turn_results.txt" "turn://"
+site:github.com "CF-Workers-TURN" "turn_results"
+site:github.com "Socks2Vlesssub" "socks5api"
+site:github.com "WorkerVless2sub" "socks5Data"
+site:github.com "free v2ray public list" raw subscription
+site:github.com "All_Configs_Sub.txt" v2ray
+site:github.com "vless.txt" "trojan.txt" "shadowsocks.txt" raw
+public OpenGW SSTP host list github raw
+public TURN proxy list github raw turn_results
