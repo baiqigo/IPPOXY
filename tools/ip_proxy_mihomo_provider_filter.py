@@ -855,9 +855,12 @@ def run_once(args: argparse.Namespace) -> tuple[dict, Path | None]:
         [
             "layer0_http_socks_pool_proxy_pool_*.json",
             "layer0_http_socks_pool_*.json",
+            "layer0_subscription_stage0_raw_*.json",
             "layer0_intake_manifest_*.json",
             "proxy_pool_bridge_manifest_*.json",
             "proxy_candidate_google_live_*.json",
+            "free_proxy_list_dynamic_sources_*.json",
+            "free_proxy_list_subscription_sources_*.json",
         ],
         keep=args.keep_runs,
         max_total_mb=args.max_research_mb,
