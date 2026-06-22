@@ -384,6 +384,9 @@ def test_run_once_can_intake_layer0_sources_and_emit_ipproxy_rows(tmp_path, monk
         keep_raw_artifact=True,
         keep_runs=100,
         max_research_mb=0,
+        mihomo_api="",
+        mihomo_provider_name="",
+        mihomo_reload_timeout=10,
     )
 
     report, raw_path = provider_filter.run_once(args)
@@ -398,3 +401,92 @@ def test_run_once_can_intake_layer0_sources_and_emit_ipproxy_rows(tmp_path, monk
     assert [row["raw"] for row in ipproxy_rows] == ["http://203.0.113.50:8080", "http://203.0.113.51:8081"]
     assert all(row["raw_pool"] is True for row in ipproxy_rows)
     assert manifest["lanes"]["http_socks"]["raw_count"] == 2
+
+
+def test_run_once_reloads_mihomo_provider_after_output_update(tmp_path, monkeypatch):
+    import ip_proxy_mihomo_provider_filter as provider_filter
+
+    input_path = tmp_path / "candidates.json"
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    input_path.write_text(
+        json.dumps([{"kind": "http", "raw": "http://203.0.113.20:8080", "source": "fixture"}]),
+        encoding="utf-8",
+    )
+
+    def fake_check_proxy(row, *, test_urls, timeout, engine, runner, checked_at):
+        parsed = provider_filter.parse_proxy(row)
+        return {
+            **row,
+            "kind": parsed.kind,
+            "raw": parsed.raw,
+            "host": parsed.host,
+            "port": parsed.port,
+            "source": parsed.source,
+            "success": True,
+            "response_ms": 10,
+            "tests": [{"url": test_urls[0], "status": "204"}],
+            "checked_at": checked_at,
+        }
+
+    reload_calls = []
+
+    def fake_reload(api_base, provider_name, timeout):
+        reload_calls.append((api_base, provider_name, timeout))
+        return {"ok": True, "status": 204, "url": f"{api_base}/providers/proxies/{provider_name}", "body": ""}
+
+    monkeypatch.setattr(provider_filter, "check_proxy", fake_check_proxy)
+    monkeypatch.setattr(provider_filter, "reload_mihomo_provider", fake_reload)
+
+    args = Namespace(
+        input=input_path,
+        output=output_dir / "vertex-auto.yaml",
+        report=output_dir / "vertex-auto-report.json",
+        latest=output_dir / "vertex-auto.latest.yaml",
+        no_latest=False,
+        ipproxy_output=output_dir / "proxy_candidate_google_live.json",
+        ipproxy_latest=output_dir / "proxy_candidate_google_live.latest.json",
+        no_ipproxy_output=False,
+        no_ipproxy_latest=False,
+        test_url=["https://www.gstatic.com/generate_204"],
+        workers=1,
+        limit=100,
+        timeout=4,
+        min_live=1,
+        engine="native",
+        allow_empty_output=False,
+        run_id="reload-unit",
+        run_bridge=False,
+        proxy_pool_repo=None,
+        clone_if_missing=False,
+        bridge_update=False,
+        bridge_update_latest=False,
+        bridge_output_dir=output_dir,
+        bridge_workers=1,
+        bridge_max_per_source=100,
+        bridge_limit=100,
+        include_source=[],
+        exclude_source=[],
+        run_layer0=False,
+        layer0_config=None,
+        layer0_output_dir=output_dir,
+        layer0_update_latest=False,
+        layer0_timeout=1,
+        layer0_workers=1,
+        layer0_dynamic_sources=None,
+        layer0_no_dynamic_sources=True,
+        layer0_only_dynamic_sources=False,
+        keep_raw_artifact=True,
+        keep_runs=100,
+        max_research_mb=0,
+        mihomo_api="http://127.0.0.1:9090",
+        mihomo_provider_name="IPPOXY-LIVE",
+        mihomo_reload_timeout=3,
+    )
+
+    report, _raw_path = provider_filter.run_once(args)
+    persisted_report = json.loads(args.report.read_text(encoding="utf-8"))
+
+    assert report["mihomo_reload"]["ok"] is True
+    assert persisted_report["mihomo_reload"]["status"] == 204
+    assert reload_calls == [("http://127.0.0.1:9090", "IPPOXY-LIVE", 3)]

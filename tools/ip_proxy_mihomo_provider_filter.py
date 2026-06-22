@@ -15,7 +15,9 @@ import struct
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -742,6 +744,27 @@ def cleanup_files(directory: Path, patterns: list[str], *, keep: int, max_total_
     return deleted
 
 
+def reload_mihomo_provider(api_base: str, provider_name: str, timeout: int) -> dict:
+    api_base = api_base.rstrip("/")
+    provider = urllib.parse.quote(provider_name, safe="")
+    url = f"{api_base}/providers/proxies/{provider}"
+    request = urllib.request.Request(url, method="PUT")
+    try:
+        with urllib.request.urlopen(request, timeout=max(1, timeout)) as response:
+            body = response.read(2000).decode("utf-8", errors="replace").strip()
+            return {
+                "ok": 200 <= int(response.status) < 300,
+                "status": int(response.status),
+                "url": url,
+                "body": body,
+            }
+    except urllib.error.HTTPError as exc:
+        body = exc.read(2000).decode("utf-8", errors="replace").strip()
+        return {"ok": False, "status": int(exc.code), "url": url, "body": body}
+    except OSError as exc:
+        return {"ok": False, "status": 0, "url": url, "error": repr(exc)}
+
+
 def maybe_run_bridge(args: argparse.Namespace) -> tuple[Path, Path | None]:
     if not args.run_bridge:
         return args.input, None
@@ -813,6 +836,13 @@ def run_once(args: argparse.Namespace) -> tuple[dict, Path | None]:
         engine=args.engine,
         allow_empty_output=args.allow_empty_output,
     )
+    if args.mihomo_api and args.mihomo_provider_name and report.get("output_updated"):
+        report["mihomo_reload"] = reload_mihomo_provider(
+            args.mihomo_api,
+            args.mihomo_provider_name,
+            args.mihomo_reload_timeout,
+        )
+        atomic_write_json(args.report, report)
     raw_path = layer0_raw_path or bridge_raw_path
     if raw_path and not args.keep_raw_artifact:
         try:
@@ -887,6 +917,9 @@ def main() -> int:
     parser.add_argument("--keep-raw-artifact", action="store_true")
     parser.add_argument("--keep-runs", type=int, default=3)
     parser.add_argument("--max-research-mb", type=int, default=512)
+    parser.add_argument("--mihomo-api", default="", help="Optional mihomo external-controller URL for provider reload.")
+    parser.add_argument("--mihomo-provider-name", default="", help="Reload this mihomo provider after output is updated.")
+    parser.add_argument("--mihomo-reload-timeout", type=int, default=10)
     args = parser.parse_args()
 
     last_report: dict | None = None
@@ -909,6 +942,7 @@ def main() -> int:
                         "output_path",
                         "ipproxy_output_path",
                         "deleted_raw_candidates",
+                        "mihomo_reload",
                     )
                 },
                 ensure_ascii=False,
