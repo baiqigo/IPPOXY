@@ -29,7 +29,9 @@ TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{[^}]+\}")
 
 DIRECT_SOURCE_FILES = {
     "http.txt": ("http", "ip_port"),
-    "https.txt": ("https", "ip_port"),
+    # gfpcom's https.txt lists HTTP CONNECT proxies for HTTPS targets, not
+    # proxies that require TLS to the proxy server itself.
+    "https.txt": ("http", "ip_port"),
     "socks4.txt": ("socks4", "ip_port"),
     "socks5.txt": ("socks5", "ip_port"),
 }

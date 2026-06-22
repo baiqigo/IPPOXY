@@ -27,6 +27,7 @@ def test_free_proxy_list_import_splits_direct_and_subscription_sources(tmp_path)
         ),
         encoding="utf-8",
     )
+    (source_dir / "https.txt").write_text("https://example.test/https-connect.txt\n", encoding="utf-8")
     (source_dir / "socks5.txt").write_text(
         "https://example.test/socks-space.txt,,SpaceURL\n",
         encoding="utf-8",
@@ -42,12 +43,15 @@ def test_free_proxy_list_import_splits_direct_and_subscription_sources(tmp_path)
 
     assert [row["url"] for row in direct] == [
         "https://example.test/http.txt",
+        "https://example.test/https-connect.txt",
         "https://example.test/socks-space.txt",
     ]
     assert direct[0]["expected_kind"] == "http"
     assert direct[0]["source_format"] == "ip_port"
-    assert direct[1]["expected_kind"] == "socks5"
-    assert direct[1]["source_format"] == "regex_ip_port"
+    assert direct[1]["expected_kind"] == "http"
+    assert direct[1]["source_type"] == "gfp_http"
+    assert direct[2]["expected_kind"] == "socks5"
+    assert direct[2]["source_format"] == "regex_ip_port"
     assert subscriptions == [
         {
             "name": subscriptions[0]["name"],
