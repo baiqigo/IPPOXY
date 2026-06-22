@@ -93,3 +93,44 @@ def test_source_registry_merges_fetchable_dynamic_sources_without_duplicates(tmp
     assert http_raw_entry["kind"] == "http"
     assert http_raw_entry["type"] == "regex_ip_port"
     assert candidate_urls == {"https://example.test/turn.txt", "https://example.test/new-turn.txt"}
+
+
+def test_source_registry_preserves_dynamic_source_name_and_format(tmp_path):
+    from ip_proxy_source_registry import load_merged_source_registry
+
+    registry = tmp_path / "layer0_sources.json"
+    registry.write_text("{}", encoding="utf-8")
+    dynamic = tmp_path / "dynamic_sources.json"
+    dynamic.write_text(
+        json.dumps(
+            {
+                "sources": [
+                    {
+                        "name": "gfp_space_socks",
+                        "url": "https://example.test/socks-space.txt",
+                        "source_type": "gfp_socks5",
+                        "expected_kind": "socks5",
+                        "source_format": "regex_ip_port",
+                        "fetchable": True,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    merged = load_merged_source_registry(registry, dynamic_path=dynamic)
+
+    assert merged["socks_sources"] == [
+        {
+            "name": "gfp_space_socks",
+            "url": "https://example.test/socks-space.txt",
+            "origin": "dynamic_sources",
+            "dynamic_source_type": "gfp_socks5",
+            "kind": "socks5",
+            "type": "regex_ip_port",
+            "max_bytes": 2000000,
+            "max_lines": 50000,
+            "max_candidates": 10000,
+        }
+    ]

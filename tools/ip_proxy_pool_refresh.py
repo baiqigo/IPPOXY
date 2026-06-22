@@ -25,7 +25,7 @@ RUNTIME_RESIN_DIR = RUNTIME / "resin"
 
 DEFAULT_STRICT_INPUT = RUNTIME_RESIN_DIR / "clean_candidates_classified.latest.json"
 DEFAULT_RELAXED_INPUT = RUNTIME_RESIN_DIR / "relaxed_candidates_classified.latest.json"
-DEFAULT_RAW_INPUT = RUNTIME_RESIN_DIR / "all_candidates_classified.latest.json"
+DEFAULT_RAW_INPUT = RUNTIME / "research/proxy_candidate_google_live.latest.json"
 DEFAULT_INPUT = DEFAULT_STRICT_INPUT
 DEFAULT_BASELINE = DOC_RUNTIME_DIR / "turn_xray_pool_20260608.json"
 DEFAULT_VERIFY = ROOT / "captures/ip_runtime_verify_latest.json"
@@ -909,6 +909,7 @@ def select_rows(
     uuid: str,
     min_new_candidates: int = 0,
     preserve_baseline_count: int = 0,
+    retain_failed_baseline: bool = True,
 ) -> tuple[list[dict], dict]:
     by_exit: dict[str, dict] = {}
     by_raw: set[str] = set()
@@ -995,7 +996,7 @@ def select_rows(
             if len(selected) >= limit:
                 break
 
-    if len(selected) < limit:
+    if retain_failed_baseline and len(selected) < limit:
         for item in baseline:
             add(item, "baseline_retain_failed", allow_bad=True)
             if len(selected) >= limit:
@@ -1027,6 +1028,7 @@ def select_rows(
         "retained_low_priority_baseline": retained_low_priority_baseline,
         "retained_bad_exit_ips": retained_bad_exit_ips,
         "retained_bad_exit_details": retained_bad_exit_details,
+        "dropped_failed_baseline": not retain_failed_baseline,
         "selected": len(selected),
         "limit": limit,
     }
@@ -1083,6 +1085,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, default=None)
     parser.add_argument("--baseline", type=Path, default=RUNTIME / "turn_xray_pool_20260608.json")
+    parser.add_argument(
+        "--ignore-baseline",
+        action="store_true",
+        default=os.environ.get("IP_PROXY_IGNORE_BASELINE", "0").strip().lower() in ("1", "true", "yes", "on"),
+        help="build the runtime only from the current candidate input; used by rolling live pools",
+    )
     parser.add_argument("--verify", type=Path, default=DEFAULT_VERIFY)
     parser.add_argument("--registrar-feedback", type=Path, default=DEFAULT_REGISTRAR_FEEDBACK)
     parser.add_argument("--source-quality", type=Path, default=DEFAULT_SOURCE_QUALITY)
@@ -1187,6 +1195,12 @@ def main() -> int:
         help="allow runtime apply even if the selected pool still contains known bad exits",
     )
     parser.add_argument(
+        "--drop-failed-baseline",
+        action="store_true",
+        default=os.environ.get("IP_PROXY_DROP_FAILED_BASELINE", "0").strip().lower() in ("1", "true", "yes", "on"),
+        help="do not retain known bad baseline exits just to fill --limit; allows shrinking the runtime pool",
+    )
+    parser.add_argument(
         "--allow-selection-quality-failures",
         action="store_true",
         default=os.environ.get("IP_PROXY_ALLOW_SELECTION_QUALITY_FAILURES", "0").strip().lower() in ("1", "true", "yes", "on"),
@@ -1205,7 +1219,7 @@ def main() -> int:
         args.input = default_input_for_pool_mode(args.pool_mode)
 
     baseline_path = args.baseline if args.baseline.exists() else DEFAULT_BASELINE
-    baseline = read_json(baseline_path, [])
+    baseline = [] if args.ignore_baseline else read_json(baseline_path, [])
     if not isinstance(baseline, list):
         raise SystemExit(f"invalid baseline mapping: {baseline_path}")
     source_quality, source_quality_meta = load_source_quality(args.source_quality)
@@ -1259,9 +1273,12 @@ def main() -> int:
         args.uuid,
         args.min_new_candidates,
         max(0, args.limit - args.min_new_candidates) if args.pool_mode in {"relaxed", "raw"} else 0,
+        not args.drop_failed_baseline,
     )
-    if len(rows) < args.limit:
+    if len(rows) < args.limit and not args.drop_failed_baseline:
         raise SystemExit(f"only selected {len(rows)} rows, need {args.limit}")
+    if len(rows) <= 0:
+        raise SystemExit("selected 0 rows; refusing to write an empty runtime")
     selection_quality = selection_quality_report(rows)
     selection_quality_gate = selection_quality_gate_config(args)
     selection_quality_failures = selection_quality_violations(selection_quality, selection_quality_gate)
@@ -1352,6 +1369,7 @@ def main() -> int:
         "pool_mode": args.pool_mode,
         "exclude_country": args.exclude_country,
         "max_response_time": args.max_response_time,
+        "ignore_baseline": args.ignore_baseline,
         "risky_selected": sum(1 for row in rows if row.get("registration_tier") == "risky"),
         "clean_selected": sum(1 for row in rows if row.get("registration_tier") == "clean"),
         "verify_bad_exit_ips": sorted(verify_failed),

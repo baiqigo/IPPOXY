@@ -53,6 +53,9 @@ def source_urls(registry: dict) -> set[str]:
 
 
 def _dynamic_name(entry: dict) -> str:
+    explicit_name = str(entry.get("name") or "").strip()
+    if explicit_name:
+        return explicit_name
     source_type = str(entry.get("source_type") or "unknown").replace(" ", "_")
     expected_kind = str(entry.get("expected_kind") or "unknown").replace(" ", "_")
     url_hash = hashlib.sha1(str(entry.get("url") or "").encode("utf-8")).hexdigest()[:10]
@@ -90,10 +93,12 @@ def _dynamic_to_registry_entry(entry: dict) -> tuple[str, dict] | None:
 
     if expected_kind in {"http", "https"}:
         group = "http_sources"
-        return group, _with_dynamic_limits(group, {**base, "kind": expected_kind, "type": "ip_port"})
+        source_format = str(entry.get("source_format") or "ip_port")
+        return group, _with_dynamic_limits(group, {**base, "kind": expected_kind, "type": source_format})
     if expected_kind in {"socks4", "socks5"}:
         group = "socks_sources"
-        return group, _with_dynamic_limits(group, {**base, "kind": expected_kind, "type": "ip_port"})
+        source_format = str(entry.get("source_format") or "ip_port")
+        return group, _with_dynamic_limits(group, {**base, "kind": expected_kind, "type": source_format})
     if expected_kind == "subscription":
         group = "subscription_sources"
         return group, _with_dynamic_limits(group, {**base, "type": "share_url"})

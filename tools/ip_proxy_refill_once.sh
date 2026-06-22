@@ -15,6 +15,7 @@ ONLY_KIND="${ONLY_KIND:-}"
 INCLUDE_COOLDOWN_SOURCES="${INCLUDE_COOLDOWN_SOURCES:-0}"
 RELAX_SOURCE_CAP="${RELAX_SOURCE_CAP:-0}"
 IP_PROXY_POOL_SIZE_WAS_SET="${IP_PROXY_POOL_SIZE+x}"
+IP_PROXY_POOL_MODE_WAS_SET="${IP_PROXY_POOL_MODE+x}"
 IP_PROXY_MIN_CLEAN_WAS_SET="${IP_PROXY_MIN_CLEAN+x}"
 IP_PROXY_MIN_NEW_CANDIDATES_WAS_SET="${IP_PROXY_MIN_NEW_CANDIDATES+x}"
 IP_PROXY_MAX_RISKY_CANDIDATES_WAS_SET="${IP_PROXY_MAX_RISKY_CANDIDATES+x}"
@@ -24,7 +25,12 @@ IP_PROXY_MIN_COUNTRIES_WAS_SET="${IP_PROXY_MIN_COUNTRIES+x}"
 IP_PROXY_MAX_COUNTRY_RATIO_WAS_SET="${IP_PROXY_MAX_COUNTRY_RATIO+x}"
 IP_PROXY_MAX_COMPANY_RATIO_WAS_SET="${IP_PROXY_MAX_COMPANY_RATIO+x}"
 IP_PROXY_MAX_ASN_RATIO_WAS_SET="${IP_PROXY_MAX_ASN_RATIO+x}"
-IP_PROXY_POOL_MODE="${IP_PROXY_POOL_MODE:-relaxed}"
+IP_PROXY_DIRECT_FAST_LANE="${IP_PROXY_DIRECT_FAST_LANE:-0}"
+if [[ -z "$IP_PROXY_POOL_MODE_WAS_SET" && "$IP_PROXY_DIRECT_FAST_LANE" == "1" ]]; then
+  IP_PROXY_POOL_MODE="raw"
+else
+  IP_PROXY_POOL_MODE="${IP_PROXY_POOL_MODE:-relaxed}"
+fi
 IP_PROXY_POOL_SIZE="${IP_PROXY_POOL_SIZE:-25}"
 IP_PROXY_DEFAULT_POOL_SIZE="${IP_PROXY_DEFAULT_POOL_SIZE:-500}"
 IP_PROXY_MIN_CLEAN="${IP_PROXY_MIN_CLEAN:-12}"
@@ -41,12 +47,28 @@ IP_PROXY_MAX_ASN_RATIO="${IP_PROXY_MAX_ASN_RATIO:-0.24}"
 WITH_GROK="${WITH_GROK:-0}"
 WITH_SANDBOX_LIVE_CHECK="${WITH_SANDBOX_LIVE_CHECK:-0}"
 IP_PROXY_INCREMENTAL_GROW="${IP_PROXY_INCREMENTAL_GROW:-0}"
+IP_PROXY_DROP_FAILED_BASELINE="${IP_PROXY_DROP_FAILED_BASELINE:-1}"
+IP_PROXY_THIN_FILTER="${IP_PROXY_THIN_FILTER:-1}"
+IP_PROXY_THIN_TTL_SECONDS="${IP_PROXY_THIN_TTL_SECONDS:-1200}"
+IP_PROXY_THIN_FILTER_LIMIT="${IP_PROXY_THIN_FILTER_LIMIT:-0}"
 SANDBOX_LIVE_MAX_CHECK="${SANDBOX_LIVE_MAX_CHECK:-500}"
 SANDBOX_LIVE_WORKERS="${SANDBOX_LIVE_WORKERS:-24}"
 SANDBOX_LIVE_TIMEOUT="${SANDBOX_LIVE_TIMEOUT:-12}"
+IP_PROXY_REFILL_KEEP_RUNS="${IP_PROXY_REFILL_KEEP_RUNS:-4}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 mkdir -p .runtime/ip-proxy/research .runtime/ip-proxy/resin
+
+prune_refill_artifacts() {
+  local keep="$IP_PROXY_REFILL_KEEP_RUNS"
+  if [[ -z "$keep" || "$keep" =~ [^0-9] || "$keep" == "0" ]]; then
+    return 0
+  fi
+  "$PYTHON_BIN" tools/ip_proxy_refill_retention.py --keep-runs "$keep" || true
+}
+
+prune_refill_artifacts
+trap prune_refill_artifacts EXIT
 
 if [[ "$WITH_GROK" == "1" ]]; then
   if [[ -n "${GROK_API_KEY:-${BAIQI_API_KEY:-}}" ]]; then
@@ -67,10 +89,23 @@ LAYER0_STAGE0_WORKERS="${LAYER0_STAGE0_WORKERS:-10}"
 LAYER0_STAGE0_TIMEOUT="${LAYER0_STAGE0_TIMEOUT:-8}"
 LAYER0_STAGE0_STOP_AFTER_SUCCESS="${LAYER0_STAGE0_STOP_AFTER_SUCCESS:-0}"
 LAYER0_SOURCE_REGISTRY="${LAYER0_SOURCE_REGISTRY:-tools/layer0_sources.json}"
+LAYER0_DYNAMIC_SOURCES="${LAYER0_DYNAMIC_SOURCES:-}"
+LAYER0_NO_DYNAMIC_SOURCES="${LAYER0_NO_DYNAMIC_SOURCES:-0}"
+LAYER0_ONLY_DYNAMIC_SOURCES="${LAYER0_ONLY_DYNAMIC_SOURCES:-0}"
 LAYER0_INTAKE_TIMEOUT="${LAYER0_INTAKE_TIMEOUT:-8}"
 LAYER0_INTAKE_WORKERS="${LAYER0_INTAKE_WORKERS:-8}"
 LAYER0_HTTP_SOCKS_POOL=".runtime/ip-proxy/research/layer0_http_socks_pool_${RUN_ID}.json"
 LAYER0_SUBSCRIPTION_RAW=".runtime/ip-proxy/research/layer0_subscription_stage0_raw_${RUN_ID}.json"
+WITH_GFP_SOURCE_IMPORT="${WITH_GFP_SOURCE_IMPORT:-1}"
+GFP_DYNAMIC_SOURCES="${GFP_DYNAMIC_SOURCES:-.runtime/ip-proxy/research/free_proxy_list_dynamic_sources.latest.json}"
+GFP_SUBSCRIPTION_SOURCES="${GFP_SUBSCRIPTION_SOURCES:-.runtime/ip-proxy/research/free_proxy_list_subscription_sources.latest.json}"
+GFP_SUBSCRIPTION_LIMIT="${GFP_SUBSCRIPTION_LIMIT:-$LAYER0_STAGE0_MAX_CANDIDATES}"
+GFP_SUBSCRIPTION_TIMEOUT="${GFP_SUBSCRIPTION_TIMEOUT:-$LAYER0_STAGE0_TIMEOUT}"
+GFP_SUBSCRIPTION_WORKERS="${GFP_SUBSCRIPTION_WORKERS:-$LAYER0_STAGE0_WORKERS}"
+GFP_SUBSCRIPTION_MAX_BYTES="${GFP_SUBSCRIPTION_MAX_BYTES:-4000000}"
+if [[ "$WITH_GFP_SOURCE_IMPORT" == "1" ]]; then
+  "$PYTHON_BIN" tools/ip_proxy_free_proxy_list_import.py --run-id "$RUN_ID" || true
+fi
 if [[ "$WITH_LAYER0_INTAKE" == "1" ]]; then
   LAYER0_INTAKE_ARGS=(
     --config "$LAYER0_SOURCE_REGISTRY"
@@ -81,6 +116,20 @@ if [[ "$WITH_LAYER0_INTAKE" == "1" ]]; then
   )
   if [[ "${IP_PROXY_APPLY_RUNTIME:-1}" != "1" ]]; then
     LAYER0_INTAKE_ARGS+=(--dry-run)
+  fi
+  if [[ "$LAYER0_NO_DYNAMIC_SOURCES" == "1" ]]; then
+    LAYER0_INTAKE_ARGS+=(--no-dynamic-sources)
+  else
+    EFFECTIVE_LAYER0_DYNAMIC_SOURCES="$LAYER0_DYNAMIC_SOURCES"
+    if [[ -z "$EFFECTIVE_LAYER0_DYNAMIC_SOURCES" && -s "$GFP_DYNAMIC_SOURCES" ]]; then
+      EFFECTIVE_LAYER0_DYNAMIC_SOURCES="$GFP_DYNAMIC_SOURCES"
+    fi
+    if [[ -n "$EFFECTIVE_LAYER0_DYNAMIC_SOURCES" ]]; then
+      LAYER0_INTAKE_ARGS+=(--dynamic-sources "$EFFECTIVE_LAYER0_DYNAMIC_SOURCES")
+    fi
+  fi
+  if [[ "$LAYER0_ONLY_DYNAMIC_SOURCES" == "1" ]]; then
+    LAYER0_INTAKE_ARGS+=(--only-dynamic-sources)
   fi
   "$PYTHON_BIN" tools/ip_proxy_layer0_intake.py "${LAYER0_INTAKE_ARGS[@]}" || true
 elif [[ "$WITH_LAYER0_CONSUMER" == "1" ]]; then
@@ -117,7 +166,63 @@ fi
 STAGE0_POOL_INPUT=""
 STAGE0_LIVE_COUNT="0"
 
-"$PYTHON_BIN" tools/ip_proxy_candidate_harvest.py "${HARVEST_ARGS[@]}"
+if [[ "$IP_PROXY_DIRECT_FAST_LANE" == "1" && "$WITH_SANDBOX_LIVE_CHECK" == "1" && -s "$LAYER0_HTTP_SOCKS_POOL" ]]; then
+  "$PYTHON_BIN" tools/ip_proxy_candidate_harvest.py \
+    --run-id "$RUN_ID" \
+    --skip-default-sources \
+    --extra-candidate-pool "$LAYER0_HTTP_SOCKS_POOL" \
+    --harvest-only
+else
+  "$PYTHON_BIN" tools/ip_proxy_candidate_harvest.py "${HARVEST_ARGS[@]}"
+fi
+
+if [[ "$WITH_GFP_SOURCE_IMPORT" == "1" && -s "$GFP_SUBSCRIPTION_SOURCES" ]]; then
+  GFP_STAGE0_RUN_ID="${RUN_ID}_gfp_sub"
+  GFP_STAGE0_RAW=".runtime/ip-proxy/research/subscription_stage0_raw_${GFP_STAGE0_RUN_ID}.json"
+  "$PYTHON_BIN" tools/ip_proxy_subscription_harvest.py \
+    --run-id "$GFP_STAGE0_RUN_ID" \
+    --source-file "$GFP_SUBSCRIPTION_SOURCES" \
+    --no-default-sources \
+    --limit "$GFP_SUBSCRIPTION_LIMIT" \
+    --timeout "$GFP_SUBSCRIPTION_TIMEOUT" \
+    --workers "$GFP_SUBSCRIPTION_WORKERS" \
+    --max-bytes "$GFP_SUBSCRIPTION_MAX_BYTES" || true
+  if [[ -s "$GFP_STAGE0_RAW" ]]; then
+    GFP_MERGE_JSON="$("$PYTHON_BIN" - "$LAYER0_SUBSCRIPTION_RAW" "$GFP_STAGE0_RAW" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+out_path = Path(sys.argv[1])
+inputs = [Path(value) for value in sys.argv[1:]]
+rows = []
+seen = set()
+input_counts = {}
+for path in inputs:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        data = []
+    if not isinstance(data, list):
+        data = []
+    input_counts[str(path)] = len(data)
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        raw = str(row.get("raw") or "")
+        key = str(row.get("dedup_key") or raw or json.dumps(row, sort_keys=True, ensure_ascii=False))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        rows.append(row)
+out_path.parent.mkdir(parents=True, exist_ok=True)
+out_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print(json.dumps({"status": "gfp_subscription_merge", "output": str(out_path), "inputs": input_counts, "merged": len(rows)}, ensure_ascii=False))
+PY
+)"
+    echo "$GFP_MERGE_JSON"
+  fi
+fi
 
 if [[ "$WITH_LAYER0_STAGE0_HEALTHCHECK" == "1" && -s "$LAYER0_SUBSCRIPTION_RAW" ]]; then
   "$PYTHON_BIN" tools/ip_proxy_stage0_healthcheck.py \
@@ -136,18 +241,24 @@ if [[ "$WITH_LAYER0_STAGE0_HEALTHCHECK" == "1" && -s "$LAYER0_SUBSCRIPTION_RAW" 
   fi
 fi
 
-CLASSIFY_JSON="$("$PYTHON_BIN" tools/ip_proxy_classify_clean.py \
-  --run-id "$RUN_ID" \
-  --input ".runtime/ip-proxy/research/proxy_candidate_check_${RUN_ID}.json")"
-echo "$CLASSIFY_JSON"
-CLASSIFY_LATEST_UPDATED="$("$PYTHON_BIN" -c 'import json,sys; print("1" if json.loads(sys.argv[1]).get("latest_updated") else "0")' "$CLASSIFY_JSON")"
-if [[ "$CLASSIFY_LATEST_UPDATED" != "1" && "${IP_PROXY_APPLY_ON_STALE_CLASSIFY:-0}" != "1" ]]; then
-  IP_PROXY_APPLY_RUNTIME="0"
-  echo '{"status":"guarded","reason":"classify_latest_not_updated","apply_runtime":false}'
+if [[ -s ".runtime/ip-proxy/research/proxy_candidate_check_${RUN_ID}.json" ]]; then
+  CLASSIFY_JSON="$("$PYTHON_BIN" tools/ip_proxy_classify_clean.py \
+    --run-id "$RUN_ID" \
+    --input ".runtime/ip-proxy/research/proxy_candidate_check_${RUN_ID}.json")"
+  echo "$CLASSIFY_JSON"
+  CLASSIFY_LATEST_UPDATED="$("$PYTHON_BIN" -c 'import json,sys; print("1" if json.loads(sys.argv[1]).get("latest_updated") else "0")' "$CLASSIFY_JSON")"
+  if [[ "$CLASSIFY_LATEST_UPDATED" != "1" && "${IP_PROXY_APPLY_ON_STALE_CLASSIFY:-0}" != "1" ]]; then
+    IP_PROXY_APPLY_RUNTIME="0"
+    echo '{"status":"guarded","reason":"classify_latest_not_updated","apply_runtime":false}'
+  fi
+else
+  echo '{"status":"classify_skipped","reason":"no_proxy_candidate_check_for_direct_fast_lane"}'
 fi
 
-"$PYTHON_BIN" tools/ip_proxy_source_quality_report.py \
-  --input ".runtime/ip-proxy/research/proxy_candidate_check_${RUN_ID}.json" || true
+if [[ -s ".runtime/ip-proxy/research/proxy_candidate_check_${RUN_ID}.json" ]]; then
+  "$PYTHON_BIN" tools/ip_proxy_source_quality_report.py \
+    --input ".runtime/ip-proxy/research/proxy_candidate_check_${RUN_ID}.json" || true
+fi
 
 "$PYTHON_BIN" tools/ip_proxy_registrar_feedback.py || true
 
@@ -215,6 +326,21 @@ PY
   SANDBOX_LIVE_COUNT="$("$PYTHON_BIN" -c 'import json,sys; print(int(json.loads(sys.argv[1]).get("live") or 0))' "$PROMOTION_JSON")"
   if [[ "$SANDBOX_LIVE_COUNT" != "0" ]]; then
     export IP_PROXY_REQUIRE_SANDBOX_LIVE_CANDIDATES=1
+  fi
+fi
+
+if [[ "$IP_PROXY_THIN_FILTER" == "1" && -n "$SANDBOX_LIVE_POOL_INPUT" && "$SANDBOX_LIVE_COUNT" != "0" ]]; then
+  THIN_LIVE_POOL_INPUT=".runtime/ip-proxy/research/proxy_candidate_thin_live_${RUN_ID}.json"
+  THIN_FILTER_JSON="$("$PYTHON_BIN" tools/ip_proxy_thin_live_filter.py \
+    --input "$SANDBOX_LIVE_POOL_INPUT" \
+    --output "$THIN_LIVE_POOL_INPUT" \
+    --ttl-seconds "$IP_PROXY_THIN_TTL_SECONDS" \
+    --limit "$IP_PROXY_THIN_FILTER_LIMIT")"
+  echo "$THIN_FILTER_JSON"
+  SANDBOX_LIVE_POOL_INPUT="$THIN_LIVE_POOL_INPUT"
+  SANDBOX_LIVE_COUNT="$("$PYTHON_BIN" -c 'import json,sys; print(int(json.loads(sys.argv[1]).get("kept") or 0))' "$THIN_FILTER_JSON")"
+  if [[ "$SANDBOX_LIVE_COUNT" == "0" ]]; then
+    unset IP_PROXY_REQUIRE_SANDBOX_LIVE_CANDIDATES
   fi
 fi
 
@@ -314,6 +440,9 @@ if [[ "${IP_PROXY_ALLOW_STALE_FALLBACK_CANDIDATES:-0}" == "1" ]]; then
 fi
 if [[ -n "$SANDBOX_LIVE_POOL_INPUT" && "$SANDBOX_LIVE_COUNT" != "0" ]]; then
   POOL_REFRESH_ARGS+=(--require-sandbox-live-candidates)
+fi
+if [[ "$IP_PROXY_DROP_FAILED_BASELINE" == "1" ]]; then
+  POOL_REFRESH_ARGS+=(--drop-failed-baseline)
 fi
 if [[ -n "${IP_PROXY_TURN_WORKER_HOST:-}" ]]; then
   POOL_REFRESH_ARGS+=(--worker-host "$IP_PROXY_TURN_WORKER_HOST")

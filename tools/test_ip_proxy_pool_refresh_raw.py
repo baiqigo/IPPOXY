@@ -123,6 +123,86 @@ def test_raw_pool_mode_promotes_checked_http_socks_and_l3_candidates(tmp_path):
     }
 
 
+def test_rolling_live_pool_can_ignore_baseline_and_shrink(tmp_path):
+    input_path = tmp_path / "google_live.json"
+    baseline_path = tmp_path / "baseline.json"
+    source_quality_path = tmp_path / "source_quality.json"
+    write_json(
+        input_path,
+        [
+            {
+                "kind": "http",
+                "raw": "http://203.0.113.10:8080",
+                "success": True,
+                "sandbox_live": True,
+                "registration_tier": "dirty_alive_noncn",
+                "exit_ip": "203.0.113.10",
+                "responseTime": 80,
+            }
+        ],
+    )
+    write_json(
+        baseline_path,
+        [
+            {"kind": "http", "raw": "http://203.0.113.20:8080", "exit_ip": "203.0.113.20", "local_port": 19080},
+            {"kind": "http", "raw": "http://203.0.113.21:8080", "exit_ip": "203.0.113.21", "local_port": 19081},
+        ],
+    )
+    write_json(source_quality_path, {"by_source": {}})
+
+    env = {
+        **os.environ,
+        "IPPOXY_ROOT": str(tmp_path / "root"),
+        "IP_PROXY_RUNTIME_DIR": str(tmp_path / "runtime"),
+    }
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools/ip_proxy_pool_refresh.py"),
+            "--input",
+            str(input_path),
+            "--baseline",
+            str(baseline_path),
+            "--source-quality",
+            str(source_quality_path),
+            "--verify",
+            str(tmp_path / "missing_verify.json"),
+            "--registrar-feedback",
+            str(tmp_path / "missing_feedback.json"),
+            "--pool-mode",
+            "raw",
+            "--limit",
+            "500",
+            "--ignore-baseline",
+            "--drop-failed-baseline",
+            "--allow-selection-quality-failures",
+            "--dry-run",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    result = json.loads(proc.stdout)
+    assert result["ignore_baseline"] is True
+    assert result["selected"] == 1
+    assert result["added_from_candidates"] == 1
+    assert result["retained_protected_baseline"] == 0
+    assert result["selection_quality"]["tier_counts"] == {"dirty_alive_noncn": 1}
+
+
+def test_raw_pool_default_input_is_google_live_latest():
+    from ip_proxy_pool_refresh import default_input_for_pool_mode
+
+    path = default_input_for_pool_mode("raw")
+
+    assert path.name == "proxy_candidate_google_live.latest.json"
+    assert path.parent.name == "research"
+
+
 def test_relaxed_pool_mode_uses_configurable_default_active_pool_size(tmp_path):
     input_path = tmp_path / "runtime/resin/relaxed_candidates_classified.latest.json"
     baseline_path = tmp_path / "baseline.json"
@@ -593,6 +673,74 @@ def test_refill_once_can_incrementally_grow_from_sandbox_live_output():
     assert not missing, missing
 
 
+def test_refill_once_has_direct_fast_lane_and_drops_failed_baseline():
+    text = (ROOT / "tools/ip_proxy_refill_once.sh").read_text(encoding="utf-8")
+    required = [
+        'IP_PROXY_POOL_MODE_WAS_SET="${IP_PROXY_POOL_MODE+x}"',
+        'IP_PROXY_DIRECT_FAST_LANE="${IP_PROXY_DIRECT_FAST_LANE:-0}"',
+        'IP_PROXY_POOL_MODE="raw"',
+        'IP_PROXY_DROP_FAILED_BASELINE="${IP_PROXY_DROP_FAILED_BASELINE:-1}"',
+        'IP_PROXY_THIN_FILTER="${IP_PROXY_THIN_FILTER:-1}"',
+        '--harvest-only',
+        'classify_skipped',
+        'tools/ip_proxy_thin_live_filter.py',
+        'proxy_candidate_thin_live_${RUN_ID}.json',
+        '--drop-failed-baseline',
+    ]
+    missing = [item for item in required if item not in text]
+    assert not missing, missing
+
+
+def test_refill_once_imports_gfp_sources_and_harvests_subscriptions():
+    text = (ROOT / "tools/ip_proxy_refill_once.sh").read_text(encoding="utf-8")
+    required = [
+        'WITH_GFP_SOURCE_IMPORT="${WITH_GFP_SOURCE_IMPORT:-1}"',
+        'tools/ip_proxy_free_proxy_list_import.py --run-id "$RUN_ID"',
+        'free_proxy_list_dynamic_sources.latest.json',
+        'free_proxy_list_subscription_sources.latest.json',
+        '--dynamic-sources "$EFFECTIVE_LAYER0_DYNAMIC_SOURCES"',
+        'tools/ip_proxy_subscription_harvest.py',
+        '--source-file "$GFP_SUBSCRIPTION_SOURCES"',
+        'gfp_subscription_merge',
+    ]
+    missing = [item for item in required if item not in text]
+    assert not missing, missing
+
+
+def test_pool_refresh_can_drop_failed_baseline_and_shrink_pool():
+    from ip_proxy_pool_refresh import select_rows
+
+    baseline = [
+        {"kind": "http", "raw": "http://203.0.113.1:8080", "exit_ip": "198.51.100.1", "local_port": 19080},
+        {"kind": "http", "raw": "http://203.0.113.2:8080", "exit_ip": "198.51.100.2", "local_port": 19081},
+        {"kind": "http", "raw": "http://203.0.113.3:8080", "exit_ip": "198.51.100.3", "local_port": 19082},
+    ]
+    candidates = [
+        {
+            "kind": "http",
+            "raw": "http://203.0.113.4:8080",
+            "success": True,
+            "exit_ip": "198.51.100.4",
+            "registration_tier": "dirty_alive_noncn",
+        }
+    ]
+
+    rows, meta = select_rows(
+        baseline,
+        candidates,
+        {"198.51.100.1", "198.51.100.2", "198.51.100.3"},
+        3,
+        "worker.example.test",
+        "2523c510-9ff0-415b-9582-93949bfae7e3",
+        retain_failed_baseline=False,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["exit_ip"] == "198.51.100.4"
+    assert meta["dropped_failed_baseline"] is True
+    assert meta["retained_bad_exit_ips"] == []
+
+
 def test_refill_once_promotes_stage0_subscription_live_candidates():
     text = (ROOT / "tools/ip_proxy_refill_once.sh").read_text(encoding="utf-8")
     required = [
@@ -605,6 +753,61 @@ def test_refill_once_promotes_stage0_subscription_live_candidates():
     ]
     missing = [item for item in required if item not in text]
     assert not missing, missing
+
+
+def test_refill_once_prunes_run_artifacts_for_continuous_loops():
+    text = (ROOT / "tools/ip_proxy_refill_once.sh").read_text(encoding="utf-8")
+    required = [
+        'IP_PROXY_REFILL_KEEP_RUNS="${IP_PROXY_REFILL_KEEP_RUNS:-4}"',
+        'prune_refill_artifacts',
+        'trap prune_refill_artifacts EXIT',
+        'tools/ip_proxy_refill_retention.py --keep-runs "$keep"',
+    ]
+    missing = [item for item in required if item not in text]
+    assert not missing, missing
+
+
+def test_refill_retention_keeps_latest_and_newest_run_artifacts(tmp_path):
+    from ip_proxy_refill_retention import prune_refill_artifacts
+
+    research = tmp_path / ".runtime/ip-proxy/research"
+    resin = tmp_path / ".runtime/ip-proxy/resin"
+    research.mkdir(parents=True)
+    resin.mkdir(parents=True)
+    for index in range(5):
+        for path in [
+            research / f"layer0_http_socks_pool_run{index}.json",
+            research / f"free_proxy_list_dynamic_sources_run{index}.json",
+            research / f"subscription_stage0_raw_run{index}.json",
+            resin / f"all_candidates_classified_run{index}.json",
+        ]:
+            path.write_text(f"{index}\n", encoding="utf-8")
+            mtime = 1_700_000_000 + index
+            os.utime(path, (mtime, mtime))
+    latest = research / "layer0_http_socks_pool.latest.json"
+    latest.write_text("latest\n", encoding="utf-8")
+
+    result = prune_refill_artifacts(tmp_path, keep_runs=2)
+
+    assert result["status"] == "refill_artifact_prune"
+    assert result["deleted"] == 12
+    assert latest.exists()
+    assert sorted(path.name for path in research.glob("layer0_http_socks_pool_run*.json")) == [
+        "layer0_http_socks_pool_run3.json",
+        "layer0_http_socks_pool_run4.json",
+    ]
+    assert sorted(path.name for path in research.glob("free_proxy_list_dynamic_sources_run*.json")) == [
+        "free_proxy_list_dynamic_sources_run3.json",
+        "free_proxy_list_dynamic_sources_run4.json",
+    ]
+    assert sorted(path.name for path in research.glob("subscription_stage0_raw_run*.json")) == [
+        "subscription_stage0_raw_run3.json",
+        "subscription_stage0_raw_run4.json",
+    ]
+    assert sorted(path.name for path in resin.glob("all_candidates_classified_run*.json")) == [
+        "all_candidates_classified_run3.json",
+        "all_candidates_classified_run4.json",
+    ]
 
 
 def test_subscription_renderers_keep_direct_proxies_in_resin_only():
